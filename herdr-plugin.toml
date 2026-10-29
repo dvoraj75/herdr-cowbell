@@ -1,0 +1,8 @@
+id = "dvoraj75.cowbell"
+name = "Cowbell"
+version = "0.0.1"
+min_herdr_version = "0.9.0" # placeholder until verified against a real release
+description = "Agent status on your tabs: ◐ working, ? waiting for you, ✓ done."
+platforms = ["linux", "macos"]
+
+# The startup hook, events and actions arrive with #6.

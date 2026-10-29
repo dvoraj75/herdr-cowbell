@@ -1,0 +1,14 @@
+{
+  "name": "herdr-cowbell",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Agent status on your tabs: ◐ working, ? waiting for you, ✓ done.",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "license": "MIT"
+}
