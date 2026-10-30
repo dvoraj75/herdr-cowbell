@@ -2,8 +2,9 @@
 // heading carry the same version, and optionally a release tag. The release
 // workflow (#22) passes the pushed tag as the first argument so a mismatched
 // tag fails before anything is published.
-import { readFileSync, realpathSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SEMVER = /^\d+\.\d+\.\d+$/;
@@ -83,8 +84,14 @@ function parseArray(cursor) {
       return items;
     }
     items.push(parseValue(cursor));
+    const itemRow = cursor.row;
     if (!skipFiller(cursor, true)) throw unterminated;
     const char = cursor.lines[cursor.row][cursor.col];
+    if (char !== "," && char !== "]" && cursor.row > itemRow) {
+      // The next line holds something other than a separator or the closing
+      // bracket, so the array most likely lacks its "]".
+      throw unterminated;
+    }
     if (char === ",") {
       cursor.col += 1;
     } else if (char !== "]") {
@@ -118,6 +125,7 @@ function parseValue(cursor) {
 function parseManifest(text) {
   const lines = text.split(/\r?\n/);
   const topLevel = {};
+  const tableNames = new Set();
   let seen = new Set();
   let inTable = false;
   try {
@@ -129,15 +137,26 @@ function parseManifest(text) {
         cursor.row += 1;
       } else if (trimmed.startsWith("[")) {
         if (!TABLE_HEADER.test(trimmed)) throw new ManifestSyntaxError(lineNumber, "invalid table header");
+        const header = trimmed.match(TABLE_HEADER)[1];
+        const isArrayTable = header.startsWith("[[");
+        const name = isArrayTable ? header.slice(2, -2) : header.slice(1, -1);
+        if (Object.hasOwn(topLevel, name.split(".")[0])) {
+          throw new ManifestSyntaxError(lineNumber, `table "${name}" conflicts with a top-level key`);
+        }
+        if (!isArrayTable) {
+          if (tableNames.has(name)) throw new ManifestSyntaxError(lineNumber, `duplicate table "${name}"`);
+          tableNames.add(name);
+        }
         seen = new Set();
         inTable = true;
         cursor.row += 1;
       } else {
-        const prefix = lines[cursor.row].match(KEY_PREFIX);
+        const indent = lines[cursor.row].length - lines[cursor.row].trimStart().length;
+        const prefix = lines[cursor.row].slice(indent).match(KEY_PREFIX);
         if (!prefix) throw new ManifestSyntaxError(lineNumber, "expected key = value");
         if (seen.has(prefix[1])) throw new ManifestSyntaxError(lineNumber, `duplicate key "${prefix[1]}"`);
         seen.add(prefix[1]);
-        cursor.col = prefix[0].length;
+        cursor.col = indent + prefix[0].length;
         const value = parseValue(cursor);
         skipFiller(cursor, false);
         const rest = lines[cursor.row][cursor.col];
@@ -274,8 +293,11 @@ export function readRepoFiles(rootDir) {
 function isMainModule() {
   if (!process.argv[1]) return false;
   try {
-    return fileURLToPath(import.meta.url) === realpathSync(process.argv[1]);
+    // Node's own resolver maps "check-version", "check-version.js" and symlinked
+    // paths to the file it loaded as the entry point.
+    return createRequire(import.meta.url).resolve(resolve(process.argv[1])) === fileURLToPath(import.meta.url);
   } catch {
+    // argv[1] is not a module path (e.g. `node -e ... arg`), so this is an import.
     return false;
   }
 }

@@ -239,6 +239,33 @@ test("valid manifest syntax variants are accepted", () => {
   }
 });
 
+test("indented keys are accepted at the top level and under a table", () => {
+  const manifest = `  id = "x.y"\n\tname = "Y"\nversion = "1.2.3"\nmin_herdr_version = "0.9.2"\n[[actions]]\n  id = "a"\n\tcommand = ["n"]\n`;
+  assert.deepEqual(checkVersions(inputs({ manifest })), { ok: true, version: "1.2.3", problems: [] });
+});
+
+test("a missing ] is reported on the line where the array starts", () => {
+  const manifest = `${HEAD}command = ["a", "b"\n[[events]]\nid = "e"\n`;
+  assert.deepEqual(checkVersions(inputs({ manifest })).problems, ["herdr-plugin.toml: line 5: unterminated array"]);
+});
+
+test("a table defined twice is rejected at the second header", () => {
+  const manifest = `${HEAD}[a]\nx = 1\n[a]\ny = 2\n`;
+  assert.deepEqual(checkVersions(inputs({ manifest })).problems, ['herdr-plugin.toml: line 7: duplicate table "a"']);
+});
+
+test("a table named like a top-level key is rejected", () => {
+  const manifest = `${HEAD}startup = 1\n[[startup]]\nx = 1\n`;
+  const result = checkVersions(inputs({ manifest }));
+  assert.equal(result.ok, false);
+  assert.match(result.problems[0], /^herdr-plugin\.toml: line 6: .+/);
+});
+
+test("a repeated [[array]] table is accepted", () => {
+  const manifest = `${HEAD}[[actions]]\nid = "a"\n[[actions]]\nid = "b"\n`;
+  assert.deepEqual(checkVersions(inputs({ manifest })), { ok: true, version: "1.2.3", problems: [] });
+});
+
 test("a non-string manifest field value is reported", () => {
   const manifest = 'id = "x.y"\nname = "Y"\nversion = 1\nmin_herdr_version = "0.9.2"\n';
   const result = checkVersions(inputs({ manifest }));
