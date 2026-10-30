@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- Optional working spinner: `spinner.enabled` (off by default), `spinner.frames` and `spinner.interval_ms` (at least 1000 ms). One timer drives every working tab; each frame is a tab rename (#9).
+
 ## 0.1.0 — 2026-10-30
 
 First release.

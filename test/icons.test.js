@@ -229,7 +229,6 @@ const invalidCases = [
   ["a non-boolean include_auto_named", { include_auto_named: "yes" }, /include_auto_named/],
   ["a non-object spinner", { spinner: true }, /spinner/],
   ["a non-boolean spinner.enabled", { spinner: { enabled: 1 } }, /spinner\.enabled/],
-  ["spinner.interval_ms below 1000", { spinner: { interval_ms: 999 } }, /spinner\.interval_ms/],
   ["a non-number spinner.interval_ms", { spinner: { interval_ms: "2000" } }, /spinner\.interval_ms/],
   ["a non-finite spinner.interval_ms", { spinner: { interval_ms: Infinity } }, /spinner\.interval_ms/],
   ["empty spinner.frames", { spinner: { frames: [] } }, /spinner\.frames/],
@@ -274,4 +273,45 @@ test("parseConfig returns lastGood without throwing on hostile parsed input", ()
 test("parseConfig: errors carry no 'config: ' prefix (loadConfig adds the file name)", () => {
   assert.equal(parseConfig("[]").error, "must be a JSON object");
   assert.match(parseConfig("{nope").error, /^invalid JSON \(/);
+});
+
+test("parseConfig clamps spinner.interval_ms below 1000 up to 1000 without an error", () => {
+  for (const value of [999, 0, -5]) {
+    const result = parseConfig({ spinner: { interval_ms: value } });
+    assert.equal(result.error, null);
+    assert.equal(result.config.spinner.interval_ms, 1000);
+  }
+});
+
+test("parseConfig keeps spinner.interval_ms of 1500 and clamps huge values to the timer maximum", () => {
+  assert.equal(parseConfig({ spinner: { interval_ms: 1500 } }).config.spinner.interval_ms, 1500);
+  const huge = parseConfig({ spinner: { interval_ms: 1e12 } });
+  assert.equal(huge.error, null);
+  assert.equal(huge.config.spinner.interval_ms, 2147483647);
+});
+
+test("parseConfig removes duplicate spinner.frames keeping first-occurrence order", () => {
+  const result = parseConfig({ spinner: { frames: ["b", "a", "b", "c", "a"] } });
+  assert.equal(result.error, null);
+  assert.deepEqual(result.config.spinner.frames, ["b", "a", "c"]);
+});
+
+test("parseConfig treats the spinner.interval_ms bounds exactly and does not round", () => {
+  const cases = [
+    [1000, 1000],
+    [2147483647, 2147483647],
+    [2147483648, 2147483647],
+    [1000.5, 1000.5],
+  ];
+  for (const [value, expected] of cases) {
+    const result = parseConfig({ spinner: { interval_ms: value } });
+    assert.equal(result.error, null, `interval_ms ${value}`);
+    assert.equal(result.config.spinner.interval_ms, expected, `interval_ms ${value}`);
+  }
+});
+
+test("parseConfig accepts spinner.frames that dedupe to a single frame", () => {
+  const result = parseConfig({ spinner: { frames: ["◐", "◐"] } });
+  assert.equal(result.error, null);
+  assert.deepEqual(result.config.spinner.frames, ["◐"]);
 });
