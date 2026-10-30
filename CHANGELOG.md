@@ -12,6 +12,9 @@ All notable changes to this project are documented here. The format follows [Kee
 - Optional working spinner: `spinner.enabled` (off by default), `spinner.frames` and `spinner.interval_ms` (at least 1000 ms). One timer drives every working tab; each frame is a tab rename (#9).
 - CI on every push to main and every PR: node --test on Node 18, 20 and 22 on Linux and macOS, plus a version-consistency check (scripts/check-version.js) (#18).
 - herdr smoke test in CI against the minimum and the latest herdr (scripts/smoke.sh, smoke.yml) and a weekly canary that opens a herdr-compat issue when the latest herdr breaks cowbell (#19).
+- Release workflow: pushing a vX.Y.Z tag verifies the versions, runs the tests and publishes a GitHub release with that version's CHANGELOG section as the notes (#22).
+- Docs site at https://dvoraj75.github.io/herdr-cowbell/ built with mkdocs-material and deployed from main; the ci.yml docs job builds it with --strict on every PR (#21).
+
 
 ## 0.1.0 — 2026-10-30
 

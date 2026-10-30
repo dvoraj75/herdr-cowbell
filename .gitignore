@@ -1,3 +1,5 @@
 .dark-factory/
 node_modules/
 *.log
+site/
+__pycache__/

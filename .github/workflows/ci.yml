@@ -56,3 +56,23 @@ jobs:
         run: node --version
       - name: Check versions
         run: node scripts/check-version.js
+
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # setup-uv publishes no moving major tag (only vX.Y.Z), so pin the release.
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: false
+      - name: Python
+        run: uv python install 3.12
+      - name: Install docs dependencies
+        run: |
+          uv venv --python 3.12
+          uv pip install -r docs/requirements.txt
+      - name: Build docs
+        run: .venv/bin/mkdocs build --strict
