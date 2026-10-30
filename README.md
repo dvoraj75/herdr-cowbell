@@ -193,6 +193,8 @@ So run *Cowbell: off and remove icons* first. Then disable or uninstall it with 
 
 No build step and no dependencies. Run the tests with `node --test`.
 
+CI runs the tests on Node 18, 20 and 22 on Linux and macOS for every push to `main` and every pull request. `node scripts/check-version.js [tag]` checks that `herdr-plugin.toml`, `package.json` and the top CHANGELOG heading carry the same version.
+
 Never run `herdr` commands against your live session while developing. Use a sandbox server as described in [PLAN.md](PLAN.md) under "Testing".
 
 - `bin/cowbell.js`: the daemon entry point.

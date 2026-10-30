@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- CI on every push to main and every PR: node --test on Node 18, 20 and 22 on Linux and macOS, plus a version-consistency check (scripts/check-version.js) (#18).
+
 ## 0.1.0 — 2026-10-30
 
 First release.
