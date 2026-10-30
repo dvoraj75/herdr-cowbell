@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [semantic versioning](https://semver.org/).
 
+## Unreleased
+
+### Fixed
+
+- *Cowbell: on/off* now starts cowbell when no daemon runs, whatever the saved setting says; the first press after install shows icons instead of switching off (#23).
+
 ## 0.1.0 — 2026-10-30
 
 First release.

@@ -124,7 +124,7 @@ Full action ids are `dvoraj75.cowbell.<id>`.
 
 | id | Title | What it does |
 | --- | --- | --- |
-| `toggle` | Cowbell: on/off | Turns cowbell off if it is on, otherwise on. |
+| `toggle` | Cowbell: on/off | Turns cowbell off (like *off*) if its daemon runs, otherwise switches it on and starts it. |
 | `off` | Cowbell: off and remove icons | Stops the daemon, restores every tab name and stays off across restarts. |
 | `refresh` | Cowbell: refresh now | Resyncs now. Starts a daemon if none runs. Does nothing while cowbell is off. |
 | `cycle-preset` | Cowbell: next icon preset | Switches to the next preset, writes it to `config.json` and applies it at once. |
@@ -159,7 +159,7 @@ The `spinner` options are validated but unused; they are reserved for an optiona
 
 A missing file means defaults. An invalid file (bad JSON, unknown preset or state, wrong type) logs one line and keeps the last good config, or the defaults if there is none.
 
-**When changes apply.** *Next icon preset* signals the daemon to reload `config.json` (SIGUSR2). *Refresh now* (SIGUSR1) does not reload it. A hand edit therefore applies on the next daemon start: while cowbell is on, run *Cowbell: on/off* twice (off restores the names, on starts a fresh daemon that reads the file) or restart the herdr server.
+**When changes apply.** *Next icon preset* signals the daemon to reload `config.json` (SIGUSR2). *Refresh now* (SIGUSR1) does not reload it. A hand edit therefore applies on the next daemon start: while the daemon runs, run *Cowbell: on/off* twice (off restores the names, on starts a fresh daemon that reads the file); while none runs, once is enough. Or restart the herdr server.
 
 **`include_auto_named`.** An auto-named tab is one whose label is still herdr's automatic name, its 1-based position in the workspace. herdr has no way to turn a renamed tab back into an auto-named one, so once cowbell adds an icon the tab keeps a fixed name for good. With the option on, cowbell keeps the number in sync with the tab's position while it runs; after *off* the tab keeps its last number as a fixed name. That is why it is opt-in.
 
@@ -175,7 +175,7 @@ Plugins that listen to `tab.renamed` (for example herdr-radar) wake on each icon
 
 - **Other tab renamers.** See the section above. Short version: a tab that another plugin keeps renaming loses its icon for 60 s at a time, up to 15 min.
 - **Disabling or uninstalling.** herdr runs no plugin hook for either, so icons can stay in tab names; run *Cowbell: off and remove icons* first. See [Uninstalling](#uninstalling).
-- **On/off after install.** *Cowbell: on/off* switches by the saved on/off setting, not by whether a daemon runs. Right after install cowbell is on but no daemon runs yet, so the first press switches it off. Use *Cowbell: refresh now* to start it; if you already pressed *Cowbell: on/off*, press it once more. herdr keeps the plugin's state directory across disable and uninstall, so if you switched cowbell off before that, it stays off after you enable or reinstall it: press *Cowbell: on/off* once to switch it on.
+- **Off survives reinstall.** herdr keeps the plugin's state directory across disable and uninstall, so if you switched cowbell off before that, it stays off after you enable or reinstall it: press *Cowbell: on/off* once to switch it on.
 - **Auto-named tabs.** herdr stops numbering a tab once it has been renamed and cannot restore an automatic name. With `include_auto_named: true`, cowbell keeps the number in sync itself. When cowbell is switched off, such a tab keeps its current number as a fixed name and no longer follows later moves or closes. A tab you named with just its position number (for example `3`) looks the same as an auto-named tab and may be treated as one.
 - **Server restart and live handoff.** The startup hook replaces the running daemon, so icons are back within about a second. Agent states that herdr itself resets on a handoff show as the reset state.
 - **Rare lock races.** If *Cowbell: next icon preset* crashes while holding its lock file, two presses right after the lock goes stale (10 s) can lose one preset step. A daemon start that crashes during a lock takeover can, with three starts at the same moment, briefly let two of them clean up the same stale lock; only one daemon keeps running. Neither needs any action.
