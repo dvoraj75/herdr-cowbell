@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { PRESETS, PRESET_NAMES, knownIcons, defaultConfig, parseConfig } from "../lib/icons.js";
-import { strip, compose, isAutoNamed, positions, decide, renamed, pruneState } from "../lib/label.js";
+import { strip, compose, isAutoNamed, positions, decide, renamed, pruneState, restoreLabel } from "../lib/label.js";
 
 const ICONS = knownIcons(defaultConfig());
 const VS16 = "\uFE0F";
@@ -694,4 +694,59 @@ test("pruneState with no live ids or empty state gives an empty object", () => {
   assert.deepEqual(pruneState(STATE, []), {});
   assert.deepEqual(pruneState({}, ["1"]), {});
   assert.deepEqual(pruneState(undefined, ["1"]), {});
+});
+
+// ---- restoreLabel ----
+
+const entry = (base, lastWritten, autoNamed) => ({ base, lastWritten, autoNamed });
+
+test("restoreLabel on our echo gives a custom tab its base", () => {
+  const prev = entry("api", "◐ api", false);
+  assert.equal(restoreLabel(tab("◐ api", "working"), prev, defaultConfig(), at(3)), "api");
+});
+
+test("restoreLabel on our echo gives an auto-named tab its current position, not the stored base", () => {
+  const prev = entry("2", "◐ 2", true);
+  assert.equal(restoreLabel(tab("◐ 2", "working"), prev, defaultConfig(), at(1)), "1");
+});
+
+test("restoreLabel strips the icons of any preset when the label is not our echo", () => {
+  for (const name of PRESET_NAMES) {
+    for (const [state, icon] of Object.entries(PRESETS[name])) {
+      if (icon === "") continue;
+      const label = `${icon} web`;
+      assert.equal(restoreLabel(tab(label, state), undefined, defaultConfig(), at(1)), "web", `${name}/${state}`);
+      // A tracked tab renamed behind our back takes the same strip path.
+      assert.equal(restoreLabel(tab(label, state), entry("old", "x", false), defaultConfig(), at(1)), "web");
+    }
+  }
+});
+
+test("restoreLabel strips repeated icons and uses the configured separator", () => {
+  const config = cfg({ separator: "|" });
+  assert.equal(restoreLabel(tab("✓|?|web", "idle"), null, config, at(1)), "web");
+});
+
+test("restoreLabel strips icons from the config's own icon overrides", () => {
+  const config = cfg({ icons: { working: "@@" } });
+  assert.equal(restoreLabel(tab("@@ web", "working"), undefined, config, at(1)), "web");
+  assert.equal(restoreLabel(tab("@@ web", "working"), undefined, defaultConfig(), at(1)), "@@ web");
+});
+
+test("restoreLabel leaves a label without an icon alone", () => {
+  assert.equal(restoreLabel(tab("build", "idle"), undefined, defaultConfig(), at(2)), "build");
+  assert.equal(restoreLabel(tab("build", "idle"), entry("build", "build", false), defaultConfig(), at(2)), "build");
+});
+
+test("restoreLabel falls back to the position when nothing is left", () => {
+  assert.equal(restoreLabel(tab("✓", "done"), undefined, defaultConfig(), at(4)), "4");
+  assert.equal(restoreLabel(tab("◐ ", "working"), undefined, defaultConfig(), at(5)), "5");
+  assert.equal(restoreLabel(tab("✓", "done"), entry("", "✓", false), defaultConfig(), at(6)), "6");
+});
+
+test("restoreLabel does not mutate its inputs", () => {
+  const t = deepFreeze(tab("◐ api", "working"));
+  const prev = deepFreeze(entry("api", "◐ api", false));
+  const config = deepFreeze(defaultConfig());
+  assert.equal(restoreLabel(t, prev, config, at(1)), "api");
 });

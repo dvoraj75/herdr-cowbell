@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createDaemon, LIFECYCLE_EVENTS, isTransportError } from "../lib/daemon.js";
+import { createDaemon, restoreTabs, LIFECYCLE_EVENTS, isTransportError } from "../lib/daemon.js";
 import { HerdrError } from "../lib/socket.js";
 import { defaultConfig } from "../lib/icons.js";
 
@@ -71,6 +71,10 @@ function fakeClient({ tabs, panes }) {
     trace: [],
     paneNotFound: 0,
     renameError: null,
+    renameErrors: {},
+    renameGate: null,
+    plugins: [],
+    pluginError: null,
     onRename: null,
     gate: null,
     listInFlight: 0,
@@ -91,8 +95,14 @@ function fakeClient({ tabs, panes }) {
         }
       }
       if (method === "pane.list") return { type: "pane_list", panes: c.panes.map((p) => ({ ...p })) };
+      if (method === "plugin.list") {
+        if (c.pluginError) throw c.pluginError;
+        return { type: "plugin_list", plugins: c.plugins.map((p) => ({ ...p })) };
+      }
       if (method === "tab.rename") {
+        if (c.renameGate) await c.renameGate;
         if (c.renameError) throw c.renameError;
+        if (c.renameErrors[params.tab_id]) throw c.renameErrors[params.tab_id];
         const tab = c.tabs.find((t) => t.tab_id === params.tab_id);
         if (!tab) throw new HerdrError("tab_not_found", "no such tab", method);
         c.renames.push(params);
@@ -180,6 +190,8 @@ async function withDaemon(options, body) {
     timers,
     backoff: options.backoff,
     onExit: (code) => exits.push(code),
+    pluginId: options.pluginId || null,
+    selfCheckMs: options.selfCheckMs,
   });
   const stateFile = path.join(dir, "state.json");
   const h = {
@@ -925,5 +937,351 @@ test("stop during the second subscription start lets start settle", async () => 
     await started;
     assert.equal(h.client.count("tab.list"), 0);
     assert.equal(h.client.open().length, 0);
+  });
+});
+
+// ---- startup strip ----
+
+test("startup strips leftover icons from tabs without state and keeps a correct one", async () => {
+  const tabs = [
+    tabOf("w1:t1", "✓ api", "idle"),
+    tabOf("w1:t2", "⏳ docs", "unknown"),
+    tabOf("w1:t3", "? ? build", "unknown"),
+    tabOf("w1:t4", "◐ web", "working"),
+  ];
+  await withDaemon({ tabs }, async (h) => {
+    assert.equal(fs.existsSync(h.stateFile), false, "no state.json before start");
+    await h.boot();
+    assert.deepEqual(labels(h), ["api", "docs", "build", "◐ web"]);
+    assert.deepEqual(
+      h.client.renames.map((r) => r.tab_id),
+      ["w1:t1", "w1:t2", "w1:t3"],
+      "the correct tab is not renamed",
+    );
+  });
+});
+
+// ---- restoreTabs ----
+
+test("restoreTabs renames only tabs whose label changes, in order, and keeps untracked tabs untracked", async () => {
+  const client = fakeClient({
+    tabs: [tabOf("w1:t1", "◐ api", "working"), tabOf("w1:t2", "build"), tabOf("w1:t3", "✓ docs", "done")],
+    panes: [],
+  });
+  const tabs = {
+    "w1:t1": { base: "api", lastWritten: "◐ api", autoNamed: false },
+    "w1:t2": { base: "build", lastWritten: "build", autoNamed: false },
+  };
+  const result = await restoreTabs({ client, tabs, config: defaultConfig() });
+  assert.deepEqual(client.renames, [
+    { tab_id: "w1:t1", label: "api" },
+    { tab_id: "w1:t3", label: "docs" },
+  ]);
+  assert.deepEqual(result, {
+    "w1:t1": { base: "api", lastWritten: "api", autoNamed: false },
+    "w1:t2": { base: "build", lastWritten: "build", autoNamed: false },
+  });
+  assert.equal(tabs["w1:t1"].lastWritten, "◐ api", "input not mutated");
+});
+
+test("restoreTabs gives a tracked auto-named tab its current position", async () => {
+  const client = fakeClient({ tabs: [tabOf("w1:t1", "x"), tabOf("w1:t2", "✓ 2", "done")], panes: [] });
+  const tabs = { "w1:t2": { base: "5", lastWritten: "✓ 2", autoNamed: true } };
+  const result = await restoreTabs({ client, tabs, config: defaultConfig() });
+  assert.deepEqual(client.renames, [{ tab_id: "w1:t2", label: "2" }]);
+  assert.equal(result["w1:t2"].lastWritten, "2");
+});
+
+test("restoreTabs prunes the entries of closed tabs", async () => {
+  const client = fakeClient({ tabs: [tabOf("w1:t1", "api")], panes: [] });
+  const tabs = {
+    "w1:t1": { base: "api", lastWritten: "api", autoNamed: false },
+    "w1:t9": { base: "gone", lastWritten: "gone", autoNamed: false },
+  };
+  const result = await restoreTabs({ client, tabs, config: defaultConfig() });
+  assert.deepEqual(Object.keys(result), ["w1:t1"]);
+});
+
+test("restoreTabs skips a tab that errors and carries on, logging all but tab_not_found", async () => {
+  const client = fakeClient({
+    tabs: [tabOf("w1:t1", "✓ a", "done"), tabOf("w1:t2", "✓ b", "done"), tabOf("w1:t3", "✓ c", "done")],
+    panes: [],
+  });
+  client.renameErrors["w1:t1"] = new HerdrError("tab_not_found", "gone", "tab.rename");
+  client.renameErrors["w1:t2"] = new HerdrError("internal", "boom", "tab.rename");
+  const logs = [];
+  const tabs = {
+    "w1:t2": { base: "b", lastWritten: "✓ b", autoNamed: false },
+    "w1:t3": { base: "c", lastWritten: "✓ c", autoNamed: false },
+  };
+  const result = await restoreTabs({ client, tabs, config: defaultConfig(), log: (m) => logs.push(m) });
+  assert.deepEqual(client.renames, [{ tab_id: "w1:t3", label: "c" }]);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /w1:t2/);
+  assert.equal(result["w1:t2"].lastWritten, "✓ b", "a failed tab keeps its entry as it was");
+  assert.equal(result["w1:t3"].lastWritten, "c");
+});
+
+test("restoreTabs rejects on a transport error and stops renaming", async () => {
+  const client = fakeClient({ tabs: [tabOf("w1:t1", "✓ a", "done"), tabOf("w1:t2", "✓ b", "done")], panes: [] });
+  client.renameError = transportError("EPIPE");
+  await assert.rejects(restoreTabs({ client, tabs: {}, config: defaultConfig() }), { code: "EPIPE" });
+  assert.equal(client.count("tab.rename"), 1);
+});
+
+// ---- stop({restore}) ----
+
+test("stop with restore puts every tab back to its base and resolves true", async () => {
+  await withDaemon({ tabs: [tabOf("w1:t1", "api", "working"), tabOf("w1:t2", "docs", "done")] }, async (h) => {
+    await h.boot();
+    assert.deepEqual(labels(h), ["◐ api", "✓ docs"]);
+    assert.equal(await h.daemon.stop({ restore: true }), true);
+    assert.deepEqual(labels(h), ["api", "docs"]);
+    assert.equal(h.client.closed, true);
+    assert.equal(h.readState().tabs["w1:t1"].lastWritten, "api");
+    assert.deepEqual(h.exits, []);
+  });
+});
+
+test("stop with restore waits for a rename in flight, then restores on top of it", async () => {
+  await withDaemon({ tabs: [tabOf("w1:t1", "api", "idle")] }, async (h) => {
+    await h.boot();
+    let release;
+    h.client.renameGate = new Promise((resolve) => {
+      release = resolve;
+    });
+    h.client.tabs[0].agent_status = "working";
+    h.client.emitStatus("w1:p1");
+    await h.timers.advance(100);
+    const stopping = h.daemon.stop({ restore: true });
+    await settle();
+    assert.deepEqual(h.client.renames, [], "the first rename is still blocked");
+    assert.equal(h.client.count("tab.list"), 2, "the restore has not listed tabs yet");
+    release();
+    assert.equal(await stopping, true);
+    assert.deepEqual(
+      h.client.renames.map((r) => r.label),
+      ["◐ api", "api"],
+    );
+    assert.deepEqual(labels(h), ["api"]);
+  });
+});
+
+test("stop with restore on a dead socket logs one line, still closes and saves, and resolves false", async () => {
+  await withDaemon({ tabs: [tabOf("w1:t1", "api", "working")] }, async (h) => {
+    await h.boot();
+    fs.rmSync(h.stateFile);
+    h.logs.length = 0;
+    h.client.up = false;
+    assert.equal(await h.daemon.stop({ restore: true }), false);
+    assert.equal(h.logs.length, 1);
+    assert.match(h.logs[0], /restore failed/);
+    assert.equal(h.client.closed, true);
+    assert.equal(fs.existsSync(h.stateFile), true, "state saved");
+    assert.deepEqual(labels(h), ["◐ api"]);
+  });
+});
+
+test("stop with restore is idempotent and restores once", async () => {
+  await withDaemon({ tabs: [tabOf("w1:t1", "api", "working")] }, async (h) => {
+    await h.boot();
+    const first = h.daemon.stop({ restore: true });
+    const second = h.daemon.stop({ restore: true });
+    const third = h.daemon.stop();
+    assert.equal(first, second);
+    assert.equal(first, third);
+    assert.equal(await first, true);
+    assert.equal(await h.daemon.stop({ restore: true }), true);
+    assert.equal(h.client.renames.filter((r) => r.label === "api").length, 1);
+    assert.equal(h.client.count("tab.list"), 2);
+  });
+});
+
+test("stop with restore on a daemon that never started does nothing", async () => {
+  await withDaemon({ tabs: [tabOf("w1:t1", "✓ api", "done")] }, async (h) => {
+    assert.equal(await h.daemon.stop({ restore: true }), false);
+    assert.deepEqual(h.client.calls, []);
+    assert.deepEqual(labels(h), ["✓ api"]);
+  });
+});
+
+test("stop without restore leaves the names alone and resolves false", async () => {
+  await withDaemon({ tabs: [tabOf("w1:t1", "api", "working")] }, async (h) => {
+    await h.boot();
+    assert.equal(await h.daemon.stop(), false);
+    assert.deepEqual(labels(h), ["◐ api"]);
+    assert.equal(h.client.count("tab.list"), 1);
+  });
+});
+
+// ---- refresh ----
+
+test("refresh while connected runs a resync", async () => {
+  await withDaemon({ tabs: [tabOf("w1:t1", "api", "idle")] }, async (h) => {
+    await h.boot();
+    h.client.tabs[0].agent_status = "working"; // no event: only a refresh can notice
+    await h.daemon.refresh();
+    await settle();
+    assert.deepEqual(labels(h), ["◐ api"]);
+    assert.equal(h.client.count("tab.list"), 2);
+  });
+});
+
+test("refresh during backoff cancels the retry timer and connects now", async () => {
+  await withDaemon({ tabs: [tabOf("w1:t1", "api", "working")] }, async (h) => {
+    h.client.up = false;
+    await h.boot();
+    assert.equal(h.timers.pending.size, 1, "retry timer waiting");
+    assert.equal(h.client.count("tab.list"), 0);
+    h.client.up = true;
+    await h.daemon.refresh();
+    await settle();
+    assert.equal(h.timers.pending.size, 0, "retry timer cancelled");
+    assert.deepEqual(labels(h), ["◐ api"]);
+    assert.ok(h.logs.some((l) => l.startsWith("connected")));
+  });
+});
+
+test("refresh before start and after stop does nothing", async () => {
+  await withDaemon({ tabs: [tabOf("w1:t1", "api", "working")] }, async (h) => {
+    await h.daemon.refresh();
+    assert.deepEqual(h.client.calls, []);
+    await h.boot();
+    await h.daemon.stop();
+    const calls = h.client.calls.length;
+    await h.daemon.refresh();
+    assert.equal(h.client.calls.length, calls);
+    assert.equal(h.timers.pending.size, 0);
+  });
+});
+
+// ---- setConfig ----
+
+test("setConfig with another preset renames tabs at once on the same base", async () => {
+  await withDaemon({ tabs: [tabOf("w1:t1", "api", "working")] }, async (h) => {
+    await h.boot();
+    assert.deepEqual(labels(h), ["◐ api"]);
+    await h.daemon.setConfig({ ...defaultConfig(), preset: "emoji" });
+    await settle();
+    assert.deepEqual(labels(h), ["⏳ api"]);
+    assert.equal(h.readState().tabs["w1:t1"].base, "api");
+  });
+});
+
+test("restore after setConfig strips with the new config's icons", async () => {
+  await withDaemon({ tabs: [tabOf("w1:t1", "api", "working")] }, async (h) => {
+    await h.boot();
+    await h.daemon.setConfig({ ...defaultConfig(), icons: { working: "@@" } });
+    await settle();
+    assert.deepEqual(labels(h), ["@@ api"]);
+    // Somebody changed the name without an event we saw: not our echo any more.
+    h.client.tabs[0].label = "@@ web";
+    assert.equal(await h.daemon.stop({ restore: true }), true);
+    assert.deepEqual(labels(h), ["web"]);
+  });
+});
+
+// ---- self-check ----
+
+const SELF = { pluginId: "cowbell", selfCheckMs: 10000 };
+const listed = (h) => h.client.calls.filter(([m]) => m === "plugin.list");
+const enabledPlugin = { plugin_id: "cowbell", enabled: true };
+const withPlugins = (plugins) => (h) => {
+  h.client.plugins = plugins;
+};
+
+test("self-check asks herdr about its own plugin id", async () => {
+  await withDaemon({ ...SELF, tabs: [tabOf("w1:t1", "api")], before: withPlugins([enabledPlugin]) }, async (h) => {
+    await h.boot();
+    assert.deepEqual(listed(h), [["plugin.list", { plugin_id: "cowbell" }]]);
+    assert.deepEqual(h.exits, []);
+  });
+});
+
+test("self-check runs at most once per interval", async () => {
+  await withDaemon({ ...SELF, tabs: [tabOf("w1:t1", "api")], before: withPlugins([enabledPlugin]) }, async (h) => {
+    await h.boot();
+    await h.daemon.refresh();
+    await h.daemon.refresh();
+    await h.timers.advance(9999);
+    await h.daemon.refresh();
+    assert.equal(listed(h).length, 1);
+    await h.timers.advance(1);
+    await h.daemon.refresh();
+    assert.equal(listed(h).length, 2);
+    await h.daemon.refresh();
+    assert.equal(listed(h).length, 2);
+  });
+});
+
+test("self-check never runs without a plugin id", async () => {
+  await withDaemon({ tabs: [tabOf("w1:t1", "api")] }, async (h) => {
+    await h.boot();
+    await h.timers.advance(60000);
+    await h.daemon.refresh();
+    assert.equal(listed(h).length, 0);
+  });
+});
+
+for (const [name, plugins, word] of [
+  ["disabled", [{ plugin_id: "cowbell", enabled: false }], "disabled"],
+  ["removed", [], "removed"],
+  ["another plugin only", [{ plugin_id: "other", enabled: true }], "removed"],
+]) {
+  test(`self-check: plugin ${name} restores the names and exits 0`, async () => {
+    const options = { ...SELF, tabs: [tabOf("w1:t1", "✓ api", "idle")], before: withPlugins(plugins) };
+    await withDaemon(options, async (h) => {
+      await h.boot();
+      assert.ok(
+        h.logs.some((l) => l.includes(word) && l.includes("restoring")),
+        `log mentions ${word}: ${h.logs.join(" | ")}`,
+      );
+      assert.deepEqual(labels(h), ["api"]);
+      assert.deepEqual(h.exits, [0]);
+      assert.equal(h.client.closed, true);
+    });
+  });
+}
+
+test("self-check: a plugin disabled later restores tabs the daemon had already renamed", async () => {
+  await withDaemon({ ...SELF, tabs: [tabOf("w1:t1", "api", "working")], before: withPlugins([enabledPlugin]) }, async (h) => {
+    await h.boot();
+    assert.deepEqual(labels(h), ["◐ api"]);
+    h.client.plugins = [{ plugin_id: "cowbell", enabled: false }];
+    await h.timers.advance(10000);
+    await h.daemon.refresh();
+    await settle();
+    assert.deepEqual(labels(h), ["api"]);
+    assert.deepEqual(h.exits, [0]);
+  });
+});
+
+test("self-check: an error reply from herdr switches the check off and the daemon keeps running", async () => {
+  await withDaemon({ ...SELF, tabs: [tabOf("w1:t1", "api", "idle")] }, async (h) => {
+    h.client.pluginError = new HerdrError("unknown_method", "no plugin.list", "plugin.list");
+    await h.boot();
+    assert.equal(listed(h).length, 1);
+    h.client.tabs[0].agent_status = "working";
+    await h.timers.advance(60000);
+    await h.daemon.refresh();
+    assert.equal(listed(h).length, 1, "asked once, never again");
+    assert.deepEqual(labels(h), ["◐ api"], "still resyncing");
+    assert.deepEqual(h.exits, []);
+  });
+});
+
+test("self-check: a transport error is ignored and the check is tried again later", async () => {
+  await withDaemon({ ...SELF, tabs: [tabOf("w1:t1", "api", "idle")] }, async (h) => {
+    h.client.pluginError = transportError("EPIPE");
+    await h.boot();
+    assert.equal(listed(h).length, 1);
+    assert.deepEqual(h.exits, []);
+    assert.deepEqual(h.client.renames, []);
+    h.client.pluginError = null;
+    h.client.plugins = [enabledPlugin];
+    await h.timers.advance(10000);
+    await h.daemon.refresh();
+    assert.equal(listed(h).length, 2);
+    assert.deepEqual(h.exits, []);
   });
 });

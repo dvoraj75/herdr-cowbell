@@ -1,0 +1,139 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { cyclePreset, loadConfig, nextPreset } from "../lib/config.js";
+import { defaultConfig } from "../lib/icons.js";
+
+/**
+ * Run `body` with a fresh temp dir that is removed afterwards.
+ * @param {(dir: string) => void} body
+ */
+function withTempDir(body) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-"));
+  try {
+    body(dir);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** @returns {{log: (message: string) => void, lines: string[]}} */
+function recorder() {
+  const lines = [];
+  return { log: (message) => lines.push(message), lines };
+}
+
+test("loadConfig: no dir or no config.json gives the defaults silently", () => {
+  withTempDir((dir) => {
+    const { log, lines } = recorder();
+    assert.deepEqual(loadConfig(undefined, log), defaultConfig());
+    assert.deepEqual(loadConfig(dir, log), defaultConfig());
+    assert.deepEqual(loadConfig(path.join(dir, "absent"), log), defaultConfig());
+    assert.deepEqual(lines, []);
+  });
+});
+
+test("loadConfig merges a valid config.json over the defaults", () => {
+  withTempDir((dir) => {
+    fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ preset: "emoji", separator: "|" }));
+    const { log, lines } = recorder();
+    const config = loadConfig(dir, log);
+    assert.deepEqual(config, { ...defaultConfig(), preset: "emoji", separator: "|" });
+    assert.deepEqual(lines, []);
+  });
+});
+
+test("loadConfig: an invalid config.json gives the defaults and one log line", () => {
+  for (const content of ["{oops", JSON.stringify({ preset: "nope" })]) {
+    withTempDir((dir) => {
+      fs.writeFileSync(path.join(dir, "config.json"), content);
+      const { log, lines } = recorder();
+      assert.deepEqual(loadConfig(dir, log), defaultConfig());
+      assert.equal(lines.length, 1);
+      assert.match(lines[0], /^config\.json: /);
+    });
+  }
+});
+
+test("loadConfig: a bad file keeps lastGood and logs one line", () => {
+  const lastGood = { ...defaultConfig(), preset: "emoji" };
+  for (const content of ["{oops", JSON.stringify({ preset: "nope" })]) {
+    withTempDir((dir) => {
+      fs.writeFileSync(path.join(dir, "config.json"), content);
+      const { log, lines } = recorder();
+      assert.deepEqual(loadConfig(dir, log, lastGood), lastGood);
+      assert.equal(lines.length, 1);
+    });
+  }
+});
+
+test("loadConfig: a missing file means the defaults even with lastGood", () => {
+  withTempDir((dir) => {
+    const { log, lines } = recorder();
+    const lastGood = { ...defaultConfig(), preset: "emoji" };
+    assert.deepEqual(loadConfig(dir, log, lastGood), defaultConfig());
+    assert.deepEqual(loadConfig(undefined, log, lastGood), defaultConfig());
+    assert.deepEqual(lines, []);
+  });
+});
+
+test("nextPreset cycles ask, symbols, emoji, nerd, ask when custom has no icons", () => {
+  const order = ["ask", "symbols", "emoji", "nerd", "ask"];
+  for (let i = 0; i < order.length - 1; i += 1) {
+    assert.equal(nextPreset(order[i], {}), order[i + 1]);
+  }
+  assert.equal(nextPreset("nerd", { icons: { working: "" } }), "ask");
+});
+
+test("nextPreset includes custom when config.icons has a non-empty icon, then wraps to ask", () => {
+  const config = { icons: { working: "W" } };
+  assert.equal(nextPreset("nerd", config), "custom");
+  assert.equal(nextPreset("custom", config), "ask");
+});
+
+test("nextPreset moves on from custom even when custom has no icons", () => {
+  assert.equal(nextPreset("custom", {}), "ask");
+});
+
+test("nextPreset treats unknown or missing current as ask", () => {
+  for (const current of [undefined, null, "bogus", 5]) {
+    assert.equal(nextPreset(current, {}), "symbols");
+  }
+});
+
+test("cyclePreset creates the dir and config.json with the next preset", () => {
+  withTempDir((root) => {
+    const dir = path.join(root, "nested", "cfg");
+    assert.deepEqual(cyclePreset(dir), { preset: "symbols" });
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, "config.json"), "utf8")), { preset: "symbols" });
+    assert.deepEqual(fs.readdirSync(dir), ["config.json"]);
+  });
+});
+
+test("cyclePreset keeps other keys and advances from the stored preset", () => {
+  withTempDir((dir) => {
+    const file = path.join(dir, "config.json");
+    fs.writeFileSync(file, JSON.stringify({ preset: "symbols", separator: "|", icons: { working: "W" } }));
+    assert.deepEqual(cyclePreset(dir), { preset: "emoji" });
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), {
+      preset: "emoji",
+      separator: "|",
+      icons: { working: "W" },
+    });
+    assert.deepEqual(fs.readdirSync(dir), ["config.json"]);
+  });
+});
+
+test("cyclePreset throws and leaves the file byte-identical for invalid JSON or a non-object", () => {
+  for (const content of ["{oops", "[1,2]", "null", '"text"', '{\n  "preset": "emoji",\n']) {
+    withTempDir((dir) => {
+      const file = path.join(dir, "config.json");
+      fs.writeFileSync(file, content);
+      assert.throws(() => cyclePreset(dir), /config\.json/);
+      assert.equal(fs.readFileSync(file, "utf8"), content);
+      assert.deepEqual(fs.readdirSync(dir), ["config.json"]);
+    });
+  }
+});

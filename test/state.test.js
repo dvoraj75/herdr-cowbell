@@ -3,8 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadState, saveState, loadConfig } from "../lib/state.js";
-import { defaultConfig } from "../lib/icons.js";
+import { isEnabled, loadState, saveState, setEnabled } from "../lib/state.js";
 
 /**
  * Run `body` with a fresh temp dir that is removed afterwards.
@@ -136,34 +135,31 @@ test("loadState keeps only the known fields of an entry", () => {
   });
 });
 
-test("loadConfig: no dir or no config.json gives the defaults silently", () => {
+test("isEnabled is true on a fresh or missing dir", () => {
   withTempDir((dir) => {
-    const { log, lines } = recorder();
-    assert.deepEqual(loadConfig(undefined, log), defaultConfig());
-    assert.deepEqual(loadConfig(dir, log), defaultConfig());
-    assert.deepEqual(loadConfig(path.join(dir, "absent"), log), defaultConfig());
-    assert.deepEqual(lines, []);
+    assert.equal(isEnabled(dir), true);
+    assert.equal(isEnabled(path.join(dir, "absent")), true);
   });
 });
 
-test("loadConfig merges a valid config.json over the defaults", () => {
+test("setEnabled(false) disables, setEnabled(true) enables again", () => {
   withTempDir((dir) => {
-    fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ preset: "emoji", separator: "|" }));
-    const { log, lines } = recorder();
-    const config = loadConfig(dir, log);
-    assert.deepEqual(config, { ...defaultConfig(), preset: "emoji", separator: "|" });
-    assert.deepEqual(lines, []);
+    setEnabled(dir, false);
+    assert.equal(isEnabled(dir), false);
+    setEnabled(dir, true);
+    assert.equal(isEnabled(dir), true);
   });
 });
 
-test("loadConfig: an invalid config.json gives the defaults and one log line", () => {
-  for (const content of ["{oops", JSON.stringify({ preset: "nope" })]) {
-    withTempDir((dir) => {
-      fs.writeFileSync(path.join(dir, "config.json"), content);
-      const { log, lines } = recorder();
-      assert.deepEqual(loadConfig(dir, log), defaultConfig());
-      assert.equal(lines.length, 1);
-      assert.match(lines[0], /^config\.json: /);
-    });
-  }
+test("setEnabled creates the dir and is idempotent", () => {
+  withTempDir((root) => {
+    const dir = path.join(root, "a", "b");
+    setEnabled(dir, false);
+    assert.equal(fs.existsSync(dir), true);
+    setEnabled(dir, false);
+    assert.equal(isEnabled(dir), false);
+    setEnabled(dir, true);
+    setEnabled(dir, true);
+    assert.equal(isEnabled(dir), true);
+  });
 });
