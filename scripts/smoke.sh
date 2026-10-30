@@ -170,9 +170,13 @@ if [[ -e "$SB" || -L "$SB" ]]; then
     fi
     for f in $CREATED; do rm -rf -- "${SB:?}/$f"; done
   fi
+  # Checked above as ours and not a symlink: close it to group and others.
+  chmod 700 "$SB"
+else
+  # mkdir without -p fails on anything planted at SB since the check above
+  # (a directory, or a symlink that chmod would follow).
+  mkdir -m 700 "$SB"
 fi
-mkdir -p "$SB"
-chmod 700 "$SB"
 [[ -O "$SB" && ! -L "$SB" ]] || prereq "$SB is not owned by you; pick another SB"
 touch "$SB/$MARKER"
 mkdir -p "$SB/c/herdr" "$SB/s"
