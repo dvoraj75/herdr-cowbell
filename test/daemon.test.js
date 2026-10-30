@@ -1311,6 +1311,24 @@ test("heartbeat: with no events, a plugin disabled meanwhile is noticed after he
   });
 });
 
+test("heartbeat: runs the self-check even when an event resync checked less than selfCheckMs earlier", async () => {
+  await withDaemon({ ...SELF, tabs: [tabOf("w1:t1", "api", "working")], before: withPlugins([enabledPlugin]) }, async (h) => {
+    await h.boot();
+    await h.timers.advance(55000);
+    await h.daemon.refresh();
+    assert.equal(listed(h).length, 2, "event-driven resync checked at 55 s");
+    h.client.plugins = [{ plugin_id: "cowbell", enabled: false }];
+    await h.timers.advance(1000);
+    await h.daemon.refresh();
+    assert.equal(listed(h).length, 2, "event-driven resync at 56 s is still rate limited");
+    assert.deepEqual(h.exits, []);
+    await h.timers.advance(4000 + 100);
+    assert.equal(listed(h).length, 3, "heartbeat at 60 s ran the check");
+    assert.deepEqual(labels(h), ["api"]);
+    assert.deepEqual(h.exits, [0]);
+  });
+});
+
 test("heartbeat: with the plugin enabled and nothing changed it resyncs, renames nothing and re-arms", async () => {
   await withDaemon({ ...SELF, tabs: [tabOf("w1:t1", "api", "working")], before: withPlugins([enabledPlugin]) }, async (h) => {
     await h.boot();
