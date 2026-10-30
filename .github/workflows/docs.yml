@@ -1,0 +1,60 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "CHANGELOG.md"
+      - "README.md"
+      - ".github/CONTRIBUTING.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # setup-uv publishes no moving major tag (only vX.Y.Z), so pin the release.
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: false
+      - name: Python
+        run: uv python install 3.12
+      - name: Install docs dependencies
+        run: |
+          uv venv --python 3.12
+          uv pip install -r docs/requirements.txt
+      - name: Build docs
+        run: .venv/bin/mkdocs build --strict
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: site/
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Only this job gets the Pages and OIDC token permissions; the build job never holds them.
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
