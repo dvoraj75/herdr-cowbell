@@ -1372,6 +1372,26 @@ function fighter(h, id, name = "build") {
   return control;
 }
 
+/**
+ * Like `fighter`, but answers `delayMs` after each rename of ours, like a
+ * renamer doing slow work (a model call) before it renames.
+ * @returns {{on: boolean}} Set `on` to false to make it stop.
+ */
+function slowFighter(h, id, delayMs, name = "build") {
+  const control = { on: true };
+  h.client.onRename = (params) => {
+    if (!control.on || params.tab_id !== id) return;
+    h.timers.setTimeout(() => {
+      if (!control.on) return;
+      const tab = h.client.tabs.find((t) => t.tab_id === id);
+      if (!tab) return;
+      tab.label = name;
+      h.client.emit("tab.renamed", { tab_id: id, workspace_id: tab.workspace_id, label: name });
+    }, delayMs);
+  };
+  return control;
+}
+
 const renamesOf = (h, id) => h.client.renames.filter((r) => r.tab_id === id).length;
 const coolLogs = (h) => h.logs.filter((l) => l.includes("leaving it alone"));
 const fightTabs = () => [tabOf("w1:t1", "api", "working"), tabOf("w1:t2", "build", "working")];
@@ -1381,7 +1401,7 @@ test("a renamer that fights back makes the daemon leave the tab alone after 3 fi
     await h.boot();
     await h.timers.advance(1000);
     assert.equal(renamesOf(h, "w1:t2"), 3, "renamed 3 times, then left alone");
-    assert.deepEqual(coolLogs(h), ["tab w1:t2: renamed by someone else 3 times in 10 s, leaving it alone for 60 s"]);
+    assert.deepEqual(coolLogs(h), ["tab w1:t2: renamed by someone else 3 times in 120 s, leaving it alone for 60 s"]);
     assert.deepEqual(labels(h), ["◐ api", "build"]);
     // The entry keeps the foreign base and the label we last really wrote.
     assert.deepEqual(h.readState().tabs["w1:t2"], { base: "build", lastWritten: "◐ build", autoNamed: false });
@@ -1424,8 +1444,8 @@ test("a second round of fights doubles the cool-down", async () => {
     await h.timers.advance(60000); // t = 61000: the first cool-down ended at 60300
     assert.equal(renamesOf(h, "w1:t2"), 6, "three more renames, three more fights");
     assert.deepEqual(coolLogs(h), [
-      "tab w1:t2: renamed by someone else 3 times in 10 s, leaving it alone for 60 s",
-      "tab w1:t2: renamed by someone else 3 times in 10 s, leaving it alone for 120 s",
+      "tab w1:t2: renamed by someone else 3 times in 120 s, leaving it alone for 60 s",
+      "tab w1:t2: renamed by someone else 3 times in 120 s, leaving it alone for 120 s",
     ]);
     await h.timers.advance(119000); // t = 180000, the second one ends at 180700
     assert.equal(renamesOf(h, "w1:t2"), 6);
@@ -1433,6 +1453,49 @@ test("a second round of fights doubles the cool-down", async () => {
     assert.equal(renamesOf(h, "w1:t2"), 9);
     assert.equal(coolLogs(h).length, 3);
     assert.match(coolLogs(h)[2], /for 240 s$/);
+  });
+});
+
+test("a renamer that answers 6 s after each rename of ours gets a cool-down after 3 fights", async () => {
+  await withDaemon({ tabs: fightTabs(), before: (h) => slowFighter(h, "w1:t2", 6000) }, async (h) => {
+    await h.boot();
+    // Ours at 0, 6100 and 12200; its third answer is flushed at 18300.
+    await h.timers.advance(18200);
+    assert.equal(renamesOf(h, "w1:t2"), 3);
+    assert.deepEqual(coolLogs(h), []);
+    await h.timers.advance(200);
+    assert.equal(renamesOf(h, "w1:t2"), 3, "no fourth rename");
+    assert.deepEqual(coolLogs(h), ["tab w1:t2: renamed by someone else 3 times in 120 s, leaving it alone for 60 s"]);
+    assert.deepEqual(labels(h), ["◐ api", "build"]);
+    // Left alone until the cool-down ends at 78300, then one more round of 3.
+    await h.timers.advance(59800); // t = 78200
+    assert.equal(renamesOf(h, "w1:t2"), 3);
+    await h.timers.advance(20000); // t = 98200
+    assert.equal(renamesOf(h, "w1:t2"), 6);
+    assert.equal(coolLogs(h).length, 2);
+    assert.match(coolLogs(h)[1], /for 120 s$/);
+  });
+});
+
+test("a renamer that answers 25 s after each rename of ours gets a cool-down after 3 fights", async () => {
+  await withDaemon({ tabs: fightTabs(), before: (h) => slowFighter(h, "w1:t2", 25000) }, async (h) => {
+    await h.boot();
+    // Ours at 0, 25100 and 50200; its third answer is flushed at 75300.
+    await h.timers.advance(76000);
+    assert.equal(renamesOf(h, "w1:t2"), 3);
+    assert.deepEqual(coolLogs(h), ["tab w1:t2: renamed by someone else 3 times in 120 s, leaving it alone for 60 s"]);
+    await h.timers.advance(59000); // t = 135000, the cool-down ends at 135300
+    assert.equal(renamesOf(h, "w1:t2"), 3);
+  });
+});
+
+test("a renamer that answers 40 s after each rename of ours is not detected (documented limit)", async () => {
+  await withDaemon({ tabs: fightTabs(), before: (h) => slowFighter(h, "w1:t2", 40000) }, async (h) => {
+    await h.boot();
+    // Ours at 0, 40100, 80200, …: one rename pair per 40 s, never a fight.
+    await h.timers.advance(600000);
+    assert.deepEqual(coolLogs(h), []);
+    assert.equal(renamesOf(h, "w1:t2"), 15);
   });
 });
 

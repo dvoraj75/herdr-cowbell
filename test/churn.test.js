@@ -17,10 +17,11 @@ function fightsAt(times, options, start = null) {
   return { record, coolMs };
 }
 
-test("defaults: 3 fights in 10 s, 60 s doubling up to 15 min, strikes forgotten after an hour", () => {
+test("defaults: 3 fights in 2 min, each within 30 s of ours, 60 s doubling up to 15 min, strikes forgotten after an hour", () => {
   assert.deepEqual(CHURN_DEFAULTS, {
     limit: 3,
-    windowMs: 10000,
+    followMs: 30000,
+    windowMs: 120000,
     coolMs: 60000,
     maxCoolMs: 900000,
     quietMs: 3600000,
@@ -39,17 +40,27 @@ test("a missing record counts as a fresh one", () => {
   assert.deepEqual(noteFight(null, 5).coolMs, null);
 });
 
-test("fights further apart than the window never start a cool-down", () => {
-  const { record, coolMs } = fightsAt([0, 10000, 20000, 30000, 40000]);
+test("fights further apart than half the window never start a cool-down", () => {
+  const { record, coolMs } = fightsAt([0, 60000, 120000, 180000, 240000]);
   assert.deepEqual(coolMs, [null, null, null, null, null]);
-  assert.deepEqual(record.fights, [40000]);
+  assert.deepEqual(record.fights, [180000, 240000]);
   assert.equal(record.strikes, 0);
 });
 
 test("only fights inside the window count towards the limit", () => {
-  // 0 has left the window by 10500, so 10500 is only the second recent fight.
-  const { coolMs } = fightsAt([0, 9000, 10500, 11000]);
+  // 0 has left the window by 120500, so 120500 is only the second recent fight.
+  const { coolMs } = fightsAt([0, 100000, 120500, 121000]);
   assert.deepEqual(coolMs, [null, null, null, 60000]);
+});
+
+test("window boundary: a fight exactly windowMs old no longer counts, one just younger does", () => {
+  assert.deepEqual(fightsAt([0, 60000, 120000]).coolMs, [null, null, null]);
+  assert.deepEqual(fightsAt([0, 60000, 119999]).coolMs, [null, null, 60000]);
+});
+
+test("fights one followMs apart, a renamer answering just inside followMs, still add up to a cool-down", () => {
+  const step = CHURN_DEFAULTS.followMs + 100; // its answer plus our debounce
+  assert.deepEqual(fightsAt([0, step, 2 * step]).coolMs, [null, null, 60000]);
 });
 
 test("isCooling is true until coolUntil and false for no record", () => {
