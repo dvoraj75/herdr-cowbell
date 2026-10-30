@@ -216,7 +216,7 @@ Users bind keys in their `config.toml`:
 
 ```toml
 [[keys.command]]
-key = "prefix+b"
+key = "prefix+shift+b"
 type = "plugin_action"
 command = "dvoraj75.cowbell.toggle"
 description = "cowbell on/off"
@@ -266,6 +266,10 @@ clean herdr plugin list              # must say "No plugins installed" before yo
 - With relative `XDG_*` paths, plugin commands get relative socket and state
   paths too, and those resolve from the plugin root. So link a copy of the
   plugin that lives in `$SB` itself, or use a short absolute `$SB`.
+- The sandbox server inherits `SSH_AUTH_SOCK` from the shell that starts it,
+  and symlinks `c/herdr/herdr.sock.agent` to the live agent socket.
+- So unset it too: add `-u SSH_AUTH_SOCK` to `clean` and to the env that
+  starts the server.
 - Make agent states without a real agent:
   `clean herdr pane report-agent <pane> --source custom:test --agent test --state blocked`
   (states: `idle | working | blocked | unknown`; checked on 0.9.3). `done`

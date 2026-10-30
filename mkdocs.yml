@@ -1,0 +1,88 @@
+site_name: herdr-cowbell
+site_url: https://dvoraj75.github.io/herdr-cowbell/
+site_description: A herdr plugin that shows your agents' status as an icon in front of the tab name.
+repo_url: https://github.com/dvoraj75/herdr-cowbell
+repo_name: dvoraj75/herdr-cowbell
+edit_uri: edit/main/docs/
+
+hooks:
+  - docs/hooks.py
+
+exclude_docs: |
+  requirements.txt
+  hooks.py
+  __pycache__/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: amber
+      accent: deep orange
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: amber
+      accent: deep orange
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - content.code.copy
+    - content.action.edit
+    - navigation.instant
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - toc.follow
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  # base_path is the repo root (mkdocs runs from there). docs/hooks.py inlines
+  # .github/CONTRIBUTING.md and rewrites its relative links (the file is written for
+  # GitHub, where ../SECURITY.md resolves from .github/); the page shows only its intro
+  # until the file exists. check_paths makes a missing CHANGELOG include fail the build.
+  - pymdownx.snippets:
+      base_path: ["."]
+      check_paths: true
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - Install & update: install.md
+  - Configuration & presets: configuration.md
+  - Actions & key bindings: actions.md
+  - How it works: how-it-works.md
+  - Limitations & troubleshooting: troubleshooting.md
+  - Changelog: changelog.md
+  - Contributing: contributing.md
+
+# Strict builds also fail on links to a heading that does not exist.
+validation:
+  links:
+    anchors: warn
