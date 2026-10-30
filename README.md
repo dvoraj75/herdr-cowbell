@@ -196,6 +196,8 @@ CI runs the tests on Node 18, 20 and 22 on Linux and macOS for every push to `ma
 
 Never run `herdr` commands against your live session while developing. Use a sandbox server as described in [PLAN.md](PLAN.md) under "Testing".
 
+`scripts/smoke.sh /tmp/cbsmoke` runs the real plugin against a throwaway sandbox herdr server (herdr and node on PATH, or `HERDR_BIN`). CI runs it against the minimum and the latest herdr.
+
 - `bin/cowbell.js`: the daemon entry point.
 - `bin/ctl.js`: the control CLI behind the actions and hooks (start, stop, on, off, toggle, refresh, cycle-preset, status).
 - `lib/churn.js`: rename-fight bookkeeping.

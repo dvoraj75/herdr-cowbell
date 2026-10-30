@@ -1,0 +1,140 @@
+# Weekly canary: cowbell against the newest herdr release.
+# A red run says herdr changed something cowbell depends on. It blocks nothing.
+#
+# The legs are independent, so one red leg never stops the other. They do not
+# set continue-on-error: that would mark a failed run green and silence both
+# GitHub's scheduled-run failure notification and the report job below, which
+# is the whole signal.
+name: Canary
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: canary
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: canary (latest, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    outputs:
+      herdr: ${{ steps.resolve.outputs.tag }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Resolve herdr version
+        id: resolve
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Latest non-prerelease; preview-* tags are excluded.
+          tag=$(gh api repos/herdrdev/herdr/releases/latest --jq .tag_name)
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "unexpected herdr tag: '$tag'" >&2
+            exit 1
+          fi
+          echo "herdr tag: $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      # The release asset is downloaded directly instead of via herdr.dev/install.sh,
+      # which has no version pin. The sha256 is checked against the digest the
+      # releases API reports for the asset.
+      - name: Install herdr
+        shell: bash
+        env:
+          HERDR_TAG: ${{ steps.resolve.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS/$RUNNER_ARCH" in
+            Linux/X64) asset=herdr-linux-x86_64 ;;
+            Linux/ARM64) asset=herdr-linux-aarch64 ;;
+            macOS/ARM64) asset=herdr-macos-aarch64 ;;
+            macOS/X64) asset=herdr-macos-x86_64 ;;
+            *)
+              echo "unsupported runner: $RUNNER_OS/$RUNNER_ARCH" >&2
+              exit 1
+              ;;
+          esac
+          dl="$RUNNER_TEMP/herdr-dl"
+          bin="$RUNNER_TEMP/herdr-bin"
+          mkdir -p "$dl" "$bin"
+          gh release download "$HERDR_TAG" --repo herdrdev/herdr --pattern "$asset" --dir "$dl"
+          want=$(gh api "repos/herdrdev/herdr/releases/tags/$HERDR_TAG" \
+            --jq ".assets[] | select(.name==\"$asset\") | .digest")
+          want="${want#sha256:}"
+          if ! [[ "$want" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "no usable sha256 digest for $asset in $HERDR_TAG: '$want'" >&2
+            exit 1
+          fi
+          got=$(shasum -a 256 "$dl/$asset" | cut -d ' ' -f 1)
+          if [ "$got" != "$want" ]; then
+            echo "sha256 mismatch for $asset: got $got, want $want" >&2
+            exit 1
+          fi
+          mv "$dl/$asset" "$bin/herdr"
+          chmod +x "$bin/herdr"
+          echo "$bin" >> "$GITHUB_PATH"
+      - name: Versions
+        shell: bash
+        run: |
+          herdr --version
+          node --version
+      # /tmp/cbs, not $RUNNER_TEMP: herdr's unix socket path must fit in 104
+      # bytes and RUNNER_TEMP is far longer than that on macOS.
+      - name: Smoke
+        timeout-minutes: 5
+        shell: bash
+        run: scripts/smoke.sh /tmp/cbs
+
+  # One job rather than a step in each matrix leg, so two red legs cannot race
+  # and open two issues. The only place in the repo with issues: write.
+  report:
+    needs: smoke
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      HERDR_TAG: ${{ needs.smoke.outputs.herdr }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Open or update the herdr-compat issue
+        shell: bash
+        run: |
+          set -euo pipefail
+          title="Canary: cowbell fails against the latest herdr"
+          label="herdr-compat"
+          tag="${HERDR_TAG:-unknown}"
+          if [ -z "$(gh label list --search "$label" --json name --jq ".[] | select(.name==\"$label\") | .name")" ]; then
+            gh label create "$label" --color B60205 \
+              --description "cowbell breaks against a herdr release"
+          fi
+          existing=$(gh issue list --label "$label" --state open --json number,title \
+            --jq "[.[] | select(.title==\"$title\")] | first | .number // empty")
+          body="The weekly canary failed against herdr $tag. Run: $RUN_URL"
+          if [ -n "$existing" ]; then
+            printf '%s\n' "$body" | gh issue comment "$existing" --body-file -
+          else
+            printf '%s\n\nReproduce locally: install that herdr release, then run scripts/smoke.sh with HERDR_BIN pointing at it.\n' "$body" |
+              gh issue create --title "$title" --label "$label" --body-file -
+          fi
