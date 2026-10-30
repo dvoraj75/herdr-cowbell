@@ -51,7 +51,7 @@ test("DEFAULT_CONFIG has the documented values", () => {
     preset: "ask",
     icons: {},
     separator: " ",
-    include_auto_named: true,
+    include_auto_named: false,
     spinner: { enabled: false, frames: ["◐", "◓", "◑", "◒"], interval_ms: 1000 },
   });
 });
@@ -177,17 +177,17 @@ test("parseConfig merges a partial config over the defaults", () => {
   assert.equal(config.preset, "emoji");
   assert.deepEqual(config.icons, { done: "★" });
   assert.equal(config.separator, " | ");
-  assert.equal(config.include_auto_named, true);
+  assert.equal(config.include_auto_named, false);
   assert.equal(config.spinner.enabled, true);
   assert.equal(config.spinner.interval_ms, 2500);
   assert.deepEqual(config.spinner.frames, ["◐", "◓", "◑", "◒"]);
 });
 
 test("parseConfig accepts an already-parsed object", () => {
-  const { config, error } = parseConfig({ preset: "nerd", include_auto_named: false });
+  const { config, error } = parseConfig({ preset: "nerd", include_auto_named: true });
   assert.equal(error, null);
   assert.equal(config.preset, "nerd");
-  assert.equal(config.include_auto_named, false);
+  assert.equal(config.include_auto_named, true);
 });
 
 test("parseConfig accepts custom spinner frames and interval_ms of exactly 1000", () => {
