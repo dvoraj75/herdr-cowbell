@@ -126,6 +126,22 @@ test("cyclePreset keeps other keys and advances from the stored preset", () => {
   });
 });
 
+test("cyclePreset throws and leaves the file byte-identical when the rest of the config is invalid", () => {
+  const contents = [
+    '{"preset":"ask","separator":1}',
+    '{"preset":"ask","icons":{"bogus":"x"}}',
+  ];
+  for (const content of contents) {
+    withTempDir((dir) => {
+      const file = path.join(dir, "config.json");
+      fs.writeFileSync(file, content);
+      assert.throws(() => cyclePreset(dir), /config\.json: .*fix it by hand, not changed/);
+      assert.equal(fs.readFileSync(file, "utf8"), content);
+      assert.deepEqual(fs.readdirSync(dir), ["config.json"]);
+    });
+  }
+});
+
 test("cyclePreset throws and leaves the file byte-identical for invalid JSON or a non-object", () => {
   for (const content of ["{oops", "[1,2]", "null", '"text"', '{\n  "preset": "emoji",\n']) {
     withTempDir((dir) => {

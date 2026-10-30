@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { run } from "../lib/control.js";
+import { openDaemonLog, run } from "../lib/control.js";
 import { isEnabled, setEnabled } from "../lib/state.js";
 
 const FAKE_PID = 4242;
@@ -240,6 +240,20 @@ test("stop on a daemon that never dies sends SIGKILL, removes the pidfile and ex
   assert.deepEqual(w.out, []);
 }));
 
+test("stop's SIGKILL path leaves a pidfile that now holds another pid", inWorld(async (w) => {
+  w.writePidfile(321);
+  w.dieOnTerm = false;
+  w.deps.kill = (pid, signal) => {
+    w.kills.push([pid, signal]);
+    if (signal === "SIGKILL") {
+      w.live.delete(pid);
+      w.writePidfile(654);
+    }
+  };
+  assert.equal(await run(["stop"], w.deps), 1);
+  assert.equal(fs.readFileSync(w.pidfile(), "utf8").trim(), "654");
+}));
+
 test("on clears the disabled flag and starts the daemon", inWorld(async (w) => {
   setEnabled(w.stateDir, false);
   assert.equal(await run(["on"], w.deps), 0);
@@ -354,6 +368,66 @@ test("cycle-preset with an invalid config.json exits 1 and leaves it unchanged",
   assert.deepEqual(w.kills, []);
   assert.deepEqual(w.out, []);
 }));
+
+test("cycle-preset with a semantically invalid config.json exits 1, unchanged, no SIGUSR2", inWorld(async (w) => {
+  fs.mkdirSync(w.configDir, { recursive: true });
+  const file = path.join(w.configDir, "config.json");
+  const content = '{"preset":"ask","separator":1}';
+  fs.writeFileSync(file, content);
+  w.writePidfile(321);
+  assert.equal(await run(["cycle-preset"], w.deps), 1);
+  assert.equal(fs.readFileSync(file, "utf8"), content);
+  assert.equal(w.err.length, 1);
+  assert.deepEqual(w.kills, []);
+  assert.deepEqual(w.out, []);
+}));
+
+/**
+ * Run `body` with a fresh temp dir that is removed afterwards.
+ * @param {(dir: string) => void} body
+ */
+function withLogDir(body) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cb-log-"));
+  try {
+    body(root);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test("openDaemonLog creates the dir and opens daemon.log for appending", () => {
+  withLogDir((root) => {
+    const dir = path.join(root, "a", "state");
+    const fd = openDaemonLog(dir);
+    fs.writeSync(fd, "hello\n");
+    fs.closeSync(fd);
+    assert.equal(fs.readFileSync(path.join(dir, "daemon.log"), "utf8"), "hello\n");
+  });
+});
+
+test("openDaemonLog appends to a small log without rotating it", () => {
+  withLogDir((root) => {
+    fs.writeFileSync(path.join(root, "daemon.log"), "old\n");
+    const fd = openDaemonLog(root);
+    fs.writeSync(fd, "new\n");
+    fs.closeSync(fd);
+    assert.equal(fs.readFileSync(path.join(root, "daemon.log"), "utf8"), "old\nnew\n");
+    assert.equal(fs.existsSync(path.join(root, "daemon.log.1")), false);
+  });
+});
+
+test("openDaemonLog moves a log above 1 MiB to daemon.log.1, replacing an older one", () => {
+  withLogDir((root) => {
+    const big = "x".repeat(1024 * 1024 + 1);
+    fs.writeFileSync(path.join(root, "daemon.log"), big);
+    fs.writeFileSync(path.join(root, "daemon.log.1"), "older");
+    const fd = openDaemonLog(root);
+    fs.writeSync(fd, "fresh\n");
+    fs.closeSync(fd);
+    assert.equal(fs.readFileSync(path.join(root, "daemon.log.1"), "utf8"), big);
+    assert.equal(fs.readFileSync(path.join(root, "daemon.log"), "utf8"), "fresh\n");
+  });
+});
 
 test("cycle-preset without a config dir in the env exits 1", inWorld(async (w) => {
   delete w.deps.env.HERDR_PLUGIN_CONFIG_DIR;
