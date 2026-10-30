@@ -249,6 +249,34 @@ test("a missing ] is reported on the line where the array starts", () => {
   assert.deepEqual(checkVersions(inputs({ manifest })).problems, ["herdr-plugin.toml: line 5: unterminated array"]);
 });
 
+test("a missing ] after a trailing comma is reported on the array line", () => {
+  for (const next of ["[[events]]", "other = 1"]) {
+    const manifest = `${HEAD}command = ["a", "b",\n${next}\n`;
+    assert.deepEqual(checkVersions(inputs({ manifest })).problems, ["herdr-plugin.toml: line 5: unterminated array"], next);
+  }
+  const single = `${HEAD}command = ["a",\nother = 1\n`;
+  assert.deepEqual(checkVersions(inputs({ manifest: single })).problems, ["herdr-plugin.toml: line 5: unterminated array"]);
+});
+
+test("a missing comma between items on separate lines is reported at the second item", () => {
+  const manifest = `${HEAD}m = [\n  "a"\n  "b"\n]\n`;
+  assert.deepEqual(checkVersions(inputs({ manifest })).problems, ["herdr-plugin.toml: line 7: expected , or ]"]);
+});
+
+test("a nested multi-line array is accepted", () => {
+  const manifest = `${HEAD}x = [\n  ["a", "b"],\n  ["c"],\n]\n`;
+  assert.deepEqual(checkVersions(inputs({ manifest })), { ok: true, version: "1.2.3", problems: [] });
+});
+
+test("a table and an array of tables with the same name are rejected", () => {
+  for (const [first, second] of [["[[a]]", "[a]"], ["[a]", "[[a]]"]]) {
+    const manifest = `${HEAD}${first}\nx = 1\n${second}\n`;
+    const problems = checkVersions(inputs({ manifest })).problems;
+    assert.equal(problems.length, 1, first);
+    assert.match(problems[0], /^herdr-plugin\.toml: line 7: /, first);
+  }
+});
+
 test("a table defined twice is rejected at the second header", () => {
   const manifest = `${HEAD}[a]\nx = 1\n[a]\ny = 2\n`;
   assert.deepEqual(checkVersions(inputs({ manifest })).problems, ['herdr-plugin.toml: line 7: duplicate table "a"']);
@@ -279,4 +307,16 @@ test("the real repository files carry consistent versions", () => {
   assert.equal(result.ok, true);
   const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
   assert.equal(result.version, pkg.version);
+});
+
+test("nested arrays on their own rows are elements, not new statements", () => {
+  const bodies = [
+    "x = [\n  [1],\n  [2]\n]\n",
+    "x = [\n  [1]\n]\n",
+    "x = [\n  [[1]]\n]\n",
+  ];
+  for (const body of bodies) {
+    const manifest = `${HEAD}[[actions]]\n${body}`;
+    assert.deepEqual(checkVersions(inputs({ manifest })), { ok: true, version: "1.2.3", problems: [] }, body);
+  }
 });

@@ -77,25 +77,44 @@ function parseArray(cursor) {
   const unterminated = new ManifestSyntaxError(startRow + 1, "unterminated array");
   const items = [];
   cursor.col += 1;
-  for (;;) {
+  // A key line on a later row cannot continue the array. A header-shaped row
+  // may still be a nested array such as "[2]", so it only counts as a new
+  // statement when it does not parse as a value.
+  const startsNewStatement = () => {
+    const trimmed = cursor.lines[cursor.row].trim();
+    if (KEY_PREFIX.test(trimmed)) return true;
+    if (!TABLE_HEADER.test(trimmed)) return false;
+    const { row, col } = cursor;
+    try {
+      parseValue(cursor);
+      return false;
+    } catch (error) {
+      if (error instanceof ManifestSyntaxError) return true;
+      throw error;
+    } finally {
+      cursor.row = row;
+      cursor.col = col;
+    }
+  };
+  // Moves to the next token; a new statement on a later row ends the search.
+  const advance = () => {
+    const previousRow = cursor.row;
     if (!skipFiller(cursor, true)) throw unterminated;
+    if (cursor.row > previousRow && startsNewStatement()) throw unterminated;
+  };
+  for (;;) {
+    advance();
     if (cursor.lines[cursor.row][cursor.col] === "]") {
       cursor.col += 1;
       return items;
     }
     items.push(parseValue(cursor));
-    const itemRow = cursor.row;
-    if (!skipFiller(cursor, true)) throw unterminated;
+    advance();
     const char = cursor.lines[cursor.row][cursor.col];
-    if (char !== "," && char !== "]" && cursor.row > itemRow) {
-      // The next line holds something other than a separator or the closing
-      // bracket, so the array most likely lacks its "]".
-      throw unterminated;
-    }
     if (char === ",") {
       cursor.col += 1;
     } else if (char !== "]") {
-      throw new ManifestSyntaxError(cursor.row + 1, "unsupported or invalid value");
+      throw new ManifestSyntaxError(cursor.row + 1, "expected , or ]");
     }
   }
 }
@@ -125,7 +144,7 @@ function parseValue(cursor) {
 function parseManifest(text) {
   const lines = text.split(/\r?\n/);
   const topLevel = {};
-  const tableNames = new Set();
+  const tableKinds = new Map();
   let seen = new Set();
   let inTable = false;
   try {
@@ -143,10 +162,13 @@ function parseManifest(text) {
         if (Object.hasOwn(topLevel, name.split(".")[0])) {
           throw new ManifestSyntaxError(lineNumber, `table "${name}" conflicts with a top-level key`);
         }
-        if (!isArrayTable) {
-          if (tableNames.has(name)) throw new ManifestSyntaxError(lineNumber, `duplicate table "${name}"`);
-          tableNames.add(name);
+        const kind = isArrayTable ? "array" : "table";
+        const earlierKind = tableKinds.get(name);
+        if (earlierKind !== undefined && (kind !== earlierKind || kind === "table")) {
+          const reason = kind === earlierKind ? `duplicate table "${name}"` : `table "${name}" redefined as a different kind`;
+          throw new ManifestSyntaxError(lineNumber, reason);
         }
+        tableKinds.set(name, kind);
         seen = new Set();
         inTable = true;
         cursor.row += 1;
