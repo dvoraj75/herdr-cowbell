@@ -163,3 +163,13 @@ test("setEnabled creates the dir and is idempotent", () => {
     assert.equal(isEnabled(dir), true);
   });
 });
+
+test("saveState uses a per-process temp file, not a shared state.json.tmp", () => {
+  withTempDir((dir) => {
+    fs.mkdirSync(path.join(dir, "state.json.tmp"));
+    const tabs = { "w1:t1": { base: "a", lastWritten: "b", autoNamed: false } };
+    saveState(dir, { tabs });
+    assert.deepEqual(loadState(dir, () => {}).tabs, tabs);
+    assert.deepEqual(fs.readdirSync(dir).sort(), ["state.json", "state.json.tmp"]);
+  });
+});

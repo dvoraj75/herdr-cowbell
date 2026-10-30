@@ -270,3 +270,8 @@ test("parseConfig returns lastGood without throwing on hostile parsed input", ()
     assert.ok(result.error);
   }
 });
+
+test("parseConfig: errors carry no 'config: ' prefix (loadConfig adds the file name)", () => {
+  assert.equal(parseConfig("[]").error, "must be a JSON object");
+  assert.match(parseConfig("{nope").error, /^invalid JSON \(/);
+});

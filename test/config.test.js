@@ -53,7 +53,8 @@ test("loadConfig: an invalid config.json gives the defaults and one log line", (
       const { log, lines } = recorder();
       assert.deepEqual(loadConfig(dir, log), defaultConfig());
       assert.equal(lines.length, 1);
-      assert.match(lines[0], /^config\.json: /);
+      assert.match(lines[0], /^config\.json: (invalid JSON|preset: )/);
+      assert.ok(!lines[0].includes("config: "), lines[0]);
     });
   }
 });
@@ -238,5 +239,27 @@ test("cyclePreset leaves no lock or temp file after success or a validation fail
     fs.writeFileSync(path.join(dir, "config.json"), '{"preset":"ask","separator":1}');
     assert.throws(() => cyclePreset(dir), /fix it by hand/);
     assert.deepEqual(fs.readdirSync(dir), ["config.json"]);
+  });
+});
+
+test("loadConfig: the logged line has exactly one config.json prefix", () => {
+  withTempDir((dir) => {
+    fs.writeFileSync(path.join(dir, "config.json"), "[1]");
+    const { log, lines } = recorder();
+    loadConfig(dir, log);
+    assert.deepEqual(lines, ["config.json: must be a JSON object"]);
+    fs.writeFileSync(path.join(dir, "config.json"), "{oops");
+    loadConfig(dir, log);
+    assert.match(lines[1], /^config\.json: invalid JSON \(/);
+  });
+});
+
+test("cyclePreset removes config.json.<pid>.tmp orphans and leaves other files alone", () => {
+  withTempDir((dir) => {
+    for (const name of ["config.json.99999.tmp", "config.json.bak", "config.json.x.tmp"]) {
+      fs.writeFileSync(path.join(dir, name), "x");
+    }
+    assert.deepEqual(cyclePreset(dir), { preset: "symbols" });
+    assert.deepEqual(fs.readdirSync(dir).sort(), ["config.json", "config.json.bak", "config.json.x.tmp"]);
   });
 });
