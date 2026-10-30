@@ -46,7 +46,7 @@ w1:t4   label="notes"        status=idle
 w1:t5   label="shell"        status=unknown  focused
 ```
 
-<!-- TODO(user): screenshot ask -->
+![ask preset](docs/assets/preset-ask.png)
 
 ### symbols
 
@@ -62,7 +62,7 @@ w1:t4   label="notes"        status=idle
 w1:t5   label="shell"        status=unknown  focused
 ```
 
-<!-- TODO(user): screenshot symbols -->
+![symbols preset](docs/assets/preset-symbols.png)
 
 ### emoji
 
@@ -78,7 +78,7 @@ w1:t4   label="notes"        status=idle
 w1:t5   label="shell"        status=unknown  focused
 ```
 
-<!-- TODO(user): screenshot emoji -->
+![emoji preset](docs/assets/preset-emoji.png)
 
 ### nerd
 
@@ -94,7 +94,7 @@ w1:t4   label="notes"        status=idle
 w1:t5   label="shell"        status=unknown  focused
 ```
 
-<!-- TODO(user): screenshot nerd -->
+![nerd preset](docs/assets/preset-nerd.png)
 
 ### custom
 
@@ -114,7 +114,7 @@ w1:t4   label="notes"        status=idle
 w1:t5   label="shell"        status=unknown  focused
 ```
 
-<!-- TODO(user): screenshot custom -->
+![custom preset](docs/assets/preset-custom.png)
 
 *Cowbell: next icon preset* cycles ask → symbols → emoji → nerd → custom → ask and writes `preset` into `config.json`. `custom` is skipped unless `icons` sets at least one non-empty icon.
 
@@ -192,6 +192,8 @@ So run *Cowbell: off and remove icons* first. Then disable or uninstall it with 
 ## Development
 
 No build step and no dependencies. Run the tests with `node --test`.
+
+CI runs the tests on Node 18, 20 and 22 on Linux and macOS for every push to `main` and every pull request. `node scripts/check-version.js [tag]` checks that `herdr-plugin.toml`, `package.json` and the top CHANGELOG heading carry the same version.
 
 Never run `herdr` commands against your live session while developing. Use a sandbox server as described in [PLAN.md](PLAN.md) under "Testing".
 
