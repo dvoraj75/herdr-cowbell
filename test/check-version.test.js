@@ -36,6 +36,11 @@ test("an Unreleased heading above the release heading is accepted", () => {
   assert.deepEqual(result, { ok: true, version: "1.2.3", problems: [] });
 });
 
+test("a [Unreleased] heading above the release heading is accepted", () => {
+  const changelog = "# Changelog\n\n## [Unreleased]\n\n- thing\n\n## 1.2.3 — 2026-10-30\n";
+  assert.deepEqual(checkVersions(inputs({ changelog })), { ok: true, version: "1.2.3", problems: [] });
+});
+
 test("manifest and package.json mismatch lists both values", () => {
   const result = checkVersions(inputs({ pkg: pkgText("1.2.4") }));
   assert.equal(result.ok, false);
@@ -200,6 +205,45 @@ test("null texts are reported as not found", () => {
 test("readRepoFiles returns null for files that do not exist", () => {
   const missing = fileURLToPath(new URL("./does-not-exist-dir/", import.meta.url));
   assert.deepEqual(readRepoFiles(missing), { manifest: null, pkg: null, changelog: null });
+});
+
+const HEAD = 'id = "x.y"\nname = "Y"\nversion = "1.2.3"\nmin_herdr_version = "0.9.2"\n';
+
+test("malformed manifests give exactly one problem with the line number", () => {
+  const cases = [
+    ["unclosed table header", `${HEAD}\n[[actions]\nid = "a"\n`, 6],
+    ["missing closing quote", `${HEAD}[[actions]]\ncommand = ["node", "bin/ctl.js]\n`, 6],
+    ["double equals", `${HEAD}foo = = bar\n`, 5],
+    ["junk after a value", 'id = "x.y"\nname = "Y"\nversion = "1.2.3" x\nmin_herdr_version = "0.9.2"\n', 3],
+    ["duplicate top-level key", `${HEAD}name = "Z"\n`, 5],
+    ["unterminated array", `${HEAD}tags = [\n  "a",\n  "b"\n`, 5],
+  ];
+  for (const [label, manifest, line] of cases) {
+    const result = checkVersions(inputs({ manifest }));
+    assert.equal(result.ok, false, label);
+    assert.equal(result.version, null, label);
+    assert.equal(result.problems.length, 1, label);
+    assert.match(result.problems[0], new RegExp(`^herdr-plugin\\.toml: line ${line}: .+`), label);
+  }
+});
+
+test("valid manifest syntax variants are accepted", () => {
+  const manifests = [
+    'id="x.y"\nname="Y"\nversion="1.2.3"\nmin_herdr_version="0.9.2"\n',
+    HEAD.replace('"1.2.3"', '"1.2.3"  # current'),
+    `# leading comment\n${HEAD}\n# between\n[[actions]]  # trailing\ncommand = [\n  "node", # first\n  "bin/ctl.js",\n]\n`,
+    `${HEAD}description = 'literal \\ string'\nflag = true\nnum = -1.5\nnested = [[1, 2], ["a"]]\n`,
+  ];
+  for (const manifest of manifests) {
+    assert.deepEqual(checkVersions(inputs({ manifest })), { ok: true, version: "1.2.3", problems: [] }, manifest);
+  }
+});
+
+test("a non-string manifest field value is reported", () => {
+  const manifest = 'id = "x.y"\nname = "Y"\nversion = 1\nmin_herdr_version = "0.9.2"\n';
+  const result = checkVersions(inputs({ manifest }));
+  assert.deepEqual(result.problems, ["herdr-plugin.toml: version must be a string"]);
+  assert.equal(result.version, null);
 });
 
 test("the real repository files carry consistent versions", () => {
