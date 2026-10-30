@@ -1,0 +1,92 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag vX.Y.Z (a real run needs the tag pushed)
+        type: string
+        required: true
+      dry_run:
+        description: Build from this branch, print the notes and create nothing
+        type: boolean
+        default: true
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+    steps:
+      # Runs before checkout so a bad dispatch input reaches nothing.
+      - name: Validate tag
+        shell: bash
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag must look like vX.Y.Z"
+            exit 1
+          fi
+      # Runs first so a real run for a published tag fails before anything
+      # else; a dry run only warns, so it can be tried on a published tag.
+      # Needs no checkout because GH_REPO is set.
+      - name: Check for an existing release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if out=$(gh release view "$TAG" 2>&1); then
+            if [ "$DRY_RUN" = true ]; then
+              echo "::warning::release $TAG already exists; a real run would fail"
+            else
+              echo "::error::release $TAG already exists"
+              exit 1
+            fi
+          elif grep -q "release not found" <<<"$out"; then
+            echo "No release for $TAG yet."
+          else
+            echo "::error::gh release view failed: $out"
+            exit 1
+          fi
+      # A dry run builds from the commit the run was dispatched on, so it
+      # previews a tag before it exists and works for tags older than this
+      # workflow. A real run builds from the tag itself.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ env.DRY_RUN == 'true' && github.sha || format('refs/tags/{0}', env.TAG) }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Node version
+        run: node --version
+      - name: Check versions
+        run: node scripts/check-version.js "$TAG"
+      - name: Test
+        timeout-minutes: 5
+        run: timeout 300 node --test
+      - name: Release notes
+        run: node scripts/release-notes.js "$TAG" > "$RUNNER_TEMP/notes.md"
+      - name: Dry run
+        if: env.DRY_RUN == 'true'
+        run: |
+          cat "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md" >> "$GITHUB_STEP_SUMMARY"
+          echo "Dry run: nothing was created."
+      - name: Create release
+        if: env.DRY_RUN != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag
