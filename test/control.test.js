@@ -606,7 +606,7 @@ test("manifest declares the startup, watchdog event and four actions", () => {
   const command = (block) => JSON.stringify(JSON.parse(block.match(/^command = (\[.*\])$/m)[1]));
   const start = JSON.stringify(["node", "bin/ctl.js", "start"]);
 
-  assert.match(text, /^version = "0\.0\.1"$/m);
+  assert.match(text, /^version = "0\.1\.0"$/m);
 
   const startup = blocks("startup");
   assert.equal(startup.length, 1);

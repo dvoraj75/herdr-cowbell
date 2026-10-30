@@ -1,6 +1,6 @@
 {
   "name": "herdr-cowbell",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "description": "Agent status on your tabs: ◐ working, ? waiting for you, ✓ done.",
   "type": "module",
