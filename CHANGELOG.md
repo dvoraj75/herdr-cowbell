@@ -10,6 +10,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Added
 - Optional working spinner: `spinner.enabled` (off by default), `spinner.frames` and `spinner.interval_ms` (at least 1000 ms). One timer drives every working tab; each frame is a tab rename (#9).
 - CI on every push to main and every PR: node --test on Node 18, 20 and 22 on Linux and macOS, plus a version-consistency check (scripts/check-version.js) (#18).
+- Release workflow: pushing a vX.Y.Z tag verifies the versions, runs the tests and publishes a GitHub release with that version's CHANGELOG section as the notes (#22).
 - Docs site at https://dvoraj75.github.io/herdr-cowbell/ built with mkdocs-material and deployed from main; the ci.yml docs job builds it with --strict on every PR (#21).
 
 
