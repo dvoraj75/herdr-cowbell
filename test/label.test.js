@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { PRESETS, PRESET_NAMES, knownIcons, defaultConfig, parseConfig } from "../lib/icons.js";
-import { strip, compose, isAutoNamed, positions, decide, renamed, pruneState, restoreLabel } from "../lib/label.js";
+import { PRESETS, PRESET_NAMES, iconFor, knownIcons, defaultConfig, parseConfig } from "../lib/icons.js";
+import { isSpinning, tabIcon, strip, compose, isAutoNamed, positions, decide, renamed, pruneState, restoreLabel } from "../lib/label.js";
 
 const ICONS = knownIcons(defaultConfig());
 const VS16 = "\uFE0F";
@@ -749,4 +749,116 @@ test("restoreLabel does not mutate its inputs", () => {
   const prev = deepFreeze(entry("api", "◐ api", false));
   const config = deepFreeze(defaultConfig());
   assert.equal(restoreLabel(t, prev, config, at(1)), "api");
+});
+
+// Spinner
+
+const SPIN = { spinner: { enabled: true } };
+const DEFAULT_FRAMES = ["◐", "◓", "◑", "◒"];
+const CUSTOM_FRAMES = ["\u{1F550}", "\u{1F9D1}\u200D\u{1F4BB}", "\u2699\uFE0F", "x"];
+
+test("isSpinning is true only for a working status with an enabled spinner and frames", () => {
+  assert.equal(isSpinning("working", cfg(SPIN)), true);
+  assert.equal(isSpinning("working", cfg({})), false);
+  assert.equal(isSpinning("working", cfg({ spinner: { enabled: false } })), false);
+  for (const status of ["blocked", "done", "idle", "unknown", "nope"]) {
+    assert.equal(isSpinning(status, cfg(SPIN)), false);
+  }
+  assert.equal(isSpinning("working", { spinner: { enabled: true, frames: [] } }), false);
+  assert.equal(isSpinning("working", { spinner: { enabled: true } }), false);
+  assert.equal(isSpinning("working", { spinner: { enabled: 1, frames: ["a"] } }), false);
+  assert.equal(isSpinning("working", { spinner: [] }), false);
+  assert.equal(isSpinning("working", {}), false);
+});
+
+test("tabIcon returns the normal icon unless the spinner is active", () => {
+  for (const preset of PRESET_NAMES) {
+    const off = cfg({ preset });
+    const on = cfg({ preset, ...SPIN });
+    for (const status of ["working", "blocked", "done", "idle", "unknown", "nope"]) {
+      assert.equal(tabIcon(status, off, 3), iconFor(status, off), `${preset} ${status} off`);
+      if (status !== "working") assert.equal(tabIcon(status, on, 3), tabIcon(status, off), `${preset} ${status}`);
+    }
+  }
+});
+
+test("tabIcon picks frames with wrap-around, negative and non-finite frames", () => {
+  const config = cfg(SPIN);
+  assert.deepEqual([0, 1, 2, 3, 4, 5].map((n) => tabIcon("working", config, n)), [...DEFAULT_FRAMES, "◐", "◓"]);
+  assert.equal(tabIcon("working", config), "◐");
+  assert.equal(tabIcon("working", config, -1), "◒");
+  assert.equal(tabIcon("working", config, -5), "◒");
+  assert.equal(tabIcon("working", config, 2.9), "◑");
+  for (const bad of [NaN, Infinity, -Infinity, undefined, "2", null]) {
+    assert.equal(tabIcon("working", config, bad), "◐", String(bad));
+  }
+});
+
+test("tabIcon uses custom frames", () => {
+  const config = cfg({ spinner: { enabled: true, frames: ["a", "b"] } });
+  assert.equal(tabIcon("working", config, 0), "a");
+  assert.equal(tabIcon("working", config, 3), "b");
+});
+
+test("the spinner replaces the working icon of every preset and an icons.working override", () => {
+  for (const preset of PRESET_NAMES) {
+    assert.equal(tabIcon("working", cfg({ preset, ...SPIN }), 1), "◓", preset);
+  }
+  const config = cfg({ preset: "custom", icons: { working: "W" }, ...SPIN });
+  assert.equal(tabIcon("working", config, 0), "◐");
+  assert.equal(tabIcon("working", { ...config, spinner: { ...config.spinner, enabled: false } }), "W");
+});
+
+test("decide renames a working tab to the current spinner frame", () => {
+  const config = cfg(SPIN);
+  const first = decide(tab("1 x", "working"), null, config, { position: 1, frame: 0 });
+  assert.equal(first.label, "◐ 1 x");
+  const same = decide(tab("◐ 1 x", "working"), first.entry, config, { position: 1, frame: 0 });
+  assert.equal(same.action, "keep");
+  const next = decide(tab("◐ 1 x", "working"), first.entry, config, { position: 1, frame: 1 });
+  assert.equal(next.action, "rename");
+  assert.equal(next.label, "◓ 1 x");
+  assert.equal(next.entry.base, "1 x");
+  const echo = decide(tab("◓ 1 x", "working"), next.entry, config, { position: 1, frame: 1 });
+  assert.equal(echo.action, "keep");
+  assert.equal(echo.entry.base, "1 x");
+});
+
+test("decide with the spinner disabled ignores the frame for every preset", () => {
+  for (const preset of PRESET_NAMES) {
+    const config = cfg({ preset });
+    for (const status of ["working", "blocked", "done", "idle", "unknown"]) {
+      const a = decide(tab("name", status), null, config, { position: 2 });
+      const b = decide(tab("name", status), null, config, { position: 2, frame: 3 });
+      assert.deepEqual(b, a, `${preset} ${status}`);
+    }
+  }
+});
+
+test("strip recovers the base for every default frame, composed or stacked", () => {
+  const config = cfg(SPIN);
+  const icons = knownIcons(config);
+  for (const frame of DEFAULT_FRAMES) {
+    const label = compose("base", frame);
+    assert.equal(strip(label, icons), "base");
+    assert.equal(strip(strip(label, icons), icons), "base");
+  }
+  assert.equal(strip("◓ ◐ base", icons), "base");
+});
+
+test("strip recovers the base for custom frames, including emoji and selectors", () => {
+  const config = cfg({ spinner: { enabled: true, frames: CUSTOM_FRAMES } });
+  const icons = knownIcons(config);
+  for (const frame of CUSTOM_FRAMES) {
+    assert.equal(strip(compose("base", frame), icons), "base", frame);
+    assert.equal(strip(strip(compose("base", frame), icons), icons), "base", frame);
+  }
+  assert.equal(strip(compose("base", "\u2699"), icons), "base");
+  assert.equal(strip(`${CUSTOM_FRAMES[1]} ${CUSTOM_FRAMES[0]} base`, icons), "base");
+});
+
+test("restoreLabel strips a spinner frame from an untracked label", () => {
+  const config = cfg(SPIN);
+  assert.equal(restoreLabel(tab("◒ build", "working"), null, config, at(1)), "build");
+  assert.equal(restoreLabel(tab("◒", "working"), null, config, at(4)), "4");
 });

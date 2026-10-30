@@ -151,11 +151,11 @@ The file is `config.json` in the plugin's config directory. `herdr plugin list` 
 | `icons` | object | `{}` | Overrides single states of the preset. Keys: `working`, `blocked`, `done`, `idle`, `unknown`; values are strings. `""` removes that state's icon. |
 | `separator` | string | `" "` | Placed between icon and name. |
 | `include_auto_named` | boolean | `false` | Also put icons on auto-named tabs; see below. |
-| `spinner.enabled` | boolean | `false` | Reserved, no effect in 0.1.0. |
-| `spinner.frames` | array of strings | `["◐","◓","◑","◒"]` | Reserved, no effect in 0.1.0. Non-empty array of non-empty strings. |
-| `spinner.interval_ms` | number | `1000` | Reserved, no effect in 0.1.0. Must be at least 1000. |
+| `spinner.enabled` | boolean | `false` | Animate the icon of `working` tabs. |
+| `spinner.frames` | array of strings | `["◐","◓","◑","◒"]` | Frames shown in turn. Non-empty array of non-empty strings; duplicates are dropped. |
+| `spinner.interval_ms` | number | `1000` | Time between frames. At least 1000; lower values are clamped to 1000. |
 
-The `spinner` options are validated but unused; they are reserved for an optional spinner planned later. Their frames are still stripped from labels.
+**Spinner.** With `spinner.enabled` set to `true`, only `working` tabs are animated. One timer drives every working tab, so they all show the same frame, and it runs only while at least one tab is working. The frames replace the `working` icon of every preset and any `icons.working` override. Frames are always stripped from labels, so changing them or turning the spinner off leaves no stale frame. Every frame is a tab rename and wakes every plugin that subscribes to `tab.renamed` (for example herdr-radar), so keep it off unless you want it.
 
 A missing file means defaults. An invalid file (bad JSON, unknown preset or state, wrong type) logs one line and keeps the last good config, or the defaults if there is none.
 
@@ -181,7 +181,6 @@ Plugins that listen to `tab.renamed` (for example herdr-radar) wake on each icon
 - **Rare lock races.** If *Cowbell: next icon preset* crashes while holding its lock file, two presses right after the lock goes stale (10 s) can lose one preset step. A daemon start that crashes during a lock takeover can, with three starts at the same moment, briefly let two of them clean up the same stale lock; only one daemon keeps running. Neither needs any action.
 - **Refresh while off.** *Cowbell: refresh now* does nothing while cowbell is off.
 - **Config edits.** A hand edit of `config.json` needs a daemon restart; see [Configuration](#configuration).
-- **Spinner.** Not implemented in 0.1.0; see [Configuration](#configuration).
 
 ## Uninstalling
 

@@ -1654,3 +1654,313 @@ test("closing a tab renames each later auto-named tab once to its new position, 
     assert.equal(armed(h), 0);
   });
 });
+
+// ---- spinner ----
+
+const SPIN_MS = 1000;
+const spinConfig = () => {
+  const config = defaultConfig();
+  config.spinner.enabled = true;
+  config.spinner.interval_ms = SPIN_MS;
+  return config;
+};
+const spinners = (h) => Array.from(h.timers.pending.values()).filter((t) => t.ms === SPIN_MS).length;
+// One spinner interval plus the debounce: exactly one frame per call once the
+// spinner runs, with the frame's resync finished when it returns.
+const nextFrame = (h) => h.timers.advance(SPIN_MS + 100);
+const renamesSince = (h, from) => h.client.renames.slice(from).map((r) => `${r.tab_id}=${r.label}`);
+const spinTabs = () => [tabOf("w1:t1", "a", "working"), tabOf("w1:t2", "b", "idle"), tabOf("w1:t3", "c", "working")];
+
+test("spinner: each tick renames only the working tabs to the next frame, wrapping around", async () => {
+  await withDaemon({ config: spinConfig(), tabs: spinTabs() }, async (h) => {
+    await h.boot();
+    assert.deepEqual(labels(h), ["◐ a", "b", "◐ c"]);
+    for (const frame of ["◓", "◑", "◒", "◐", "◓"]) {
+      const from = h.client.renames.length;
+      await nextFrame(h);
+      assert.deepEqual(labels(h), [`${frame} a`, "b", `${frame} c`]);
+      assert.deepEqual(renamesSince(h, from), [`w1:t1=${frame} a`, `w1:t3=${frame} c`]);
+    }
+    assert.equal(renamesOf(h, "w1:t2"), 0, "the idle tab is never renamed");
+    assert.equal(h.client.count("tab.list"), 6, "one resync per frame, the echoes cause none");
+  });
+});
+
+test("spinner: one timer for all working tabs, only while some tab works, restarting at the first frame", async () => {
+  const tabs = [tabOf("w1:t1", "a"), tabOf("w1:t2", "b"), tabOf("w1:t3", "c")];
+  await withDaemon({ config: spinConfig(), tabs }, async (h) => {
+    await h.boot();
+    assert.equal(spinners(h), 0, "nothing works, no timer");
+    await h.timers.advance(5000);
+    assert.equal(spinners(h), 0);
+
+    h.client.tabs[0].agent_status = "working";
+    h.client.emitStatus("w1:p1", "working");
+    await h.timers.advance(100);
+    assert.deepEqual(labels(h), ["◐ a", "b", "c"]);
+    assert.equal(spinners(h), 1, "the first working tab starts the timer");
+
+    h.client.tabs[1].agent_status = "working";
+    h.client.tabs[2].agent_status = "working";
+    h.client.emitStatus("w1:p1", "working");
+    await h.timers.advance(100);
+    assert.deepEqual(labels(h), ["◐ a", "◐ b", "◐ c"]);
+    assert.equal(spinners(h), 1, "more working tabs, still one timer");
+    assert.equal(armed(h), 1, "and no other timer");
+
+    for (const frame of ["◓", "◑"]) {
+      await nextFrame(h);
+      assert.deepEqual(labels(h), [`${frame} a`, `${frame} b`, `${frame} c`]);
+      assert.equal(spinners(h), 1);
+      assert.equal(armed(h), 1);
+    }
+
+    h.client.tabs[0].agent_status = "idle";
+    h.client.tabs[1].agent_status = "idle";
+    h.client.emitStatus("w1:p1", "idle");
+    await h.timers.advance(100);
+    assert.deepEqual(labels(h), ["a", "b", "◑ c"]);
+    assert.equal(spinners(h), 1, "one tab still works");
+
+    h.client.tabs[2].agent_status = "idle";
+    h.client.emitStatus("w1:p1", "idle");
+    await h.timers.advance(100);
+    assert.deepEqual(labels(h), ["a", "b", "c"]);
+    assert.equal(spinners(h), 0, "cleared when the last tab stops working");
+    const renames = h.client.renames.length;
+    await h.timers.advance(10000);
+    assert.equal(h.client.renames.length, renames);
+    assert.equal(spinners(h), 0);
+
+    h.client.tabs[1].agent_status = "working";
+    h.client.emitStatus("w1:p1", "working");
+    await h.timers.advance(100);
+    assert.deepEqual(labels(h), ["a", "◐ b", "c"], "the frame restarts at frames[0]");
+    assert.equal(spinners(h), 1);
+    await nextFrame(h);
+    assert.deepEqual(labels(h), ["a", "◓ b", "c"]);
+  });
+});
+
+test("spinner disabled: a working tab keeps the static icon and no spinner timer is ever armed", async () => {
+  const delays = [];
+  const before = (h) => {
+    const setTimeout = h.timers.setTimeout;
+    h.timers.setTimeout = (fn, ms) => {
+      delays.push(ms);
+      return setTimeout(fn, ms);
+    };
+  };
+  await withDaemon({ tabs: spinTabs(), before }, async (h) => {
+    await h.boot();
+    assert.deepEqual(labels(h), ["◐ a", "b", "◐ c"]);
+    for (let i = 0; i < 10; i += 1) await nextFrame(h);
+    h.client.emitStatus("w1:p1", "working");
+    await h.timers.advance(100);
+    assert.deepEqual(labels(h), ["◐ a", "b", "◐ c"]);
+    assert.equal(h.client.renames.length, 2);
+    assert.equal(armed(h), 0);
+    assert.ok(!delays.includes(SPIN_MS), `no ${SPIN_MS} ms timer in ${JSON.stringify(delays)}`);
+  });
+});
+
+test("spinner: our frame renames are never foreign renames, and a real foreign rename still is", async () => {
+  await withDaemon({ config: spinConfig(), tabs: spinTabs() }, async (h) => {
+    await h.boot();
+    for (let i = 0; i < 22; i += 1) await nextFrame(h);
+    assert.deepEqual(labels(h), ["◑ a", "b", "◑ c"]);
+    assert.equal(renamesOf(h, "w1:t1"), 23);
+    assert.deepEqual(h.logs, ["started", "connected, 3 tabs"], "no fight, no cool-down");
+    assert.equal(h.readState().tabs["w1:t1"].base, "a");
+    assert.equal(h.readState().tabs["w1:t3"].base, "c");
+    assert.equal(h.client.count("tab.list"), 23, "the echoes caused no resync");
+
+    // The user renames a spinning tab: new base, current frame re-applied.
+    h.client.tabs[0].label = "api";
+    h.client.emit("tab.renamed", { tab_id: "w1:t1", label: "api" });
+    await h.timers.advance(100);
+    assert.deepEqual(labels(h), ["◑ api", "b", "◑ c"]);
+    assert.equal(h.readState().tabs["w1:t1"].base, "api");
+    assert.deepEqual(coolLogs(h), []);
+    await nextFrame(h);
+    assert.deepEqual(labels(h), ["◒ api", "b", "◒ c"]);
+  });
+});
+
+test("spinner: echoes held back for several frames are still consumed as ours", async () => {
+  await withDaemon({ config: spinConfig(), tabs: spinTabs() }, async (h) => {
+    await h.boot();
+    const held = [];
+    const emit = h.client.emit;
+    h.client.emit = (type, data) => {
+      if (type === "tab.renamed") held.push(data);
+      else emit(type, data);
+    };
+    for (let i = 0; i < 6; i += 1) await nextFrame(h);
+    assert.deepEqual(labels(h), ["◑ a", "b", "◑ c"]);
+    assert.equal(held.length, 12);
+    h.client.emit = emit;
+    const lists = h.client.count("tab.list");
+    for (const data of held) emit("tab.renamed", data);
+    assert.equal(armed(h), 1, "only the spinner timer, no resync for the late echoes");
+    assert.equal(spinners(h), 1);
+    await nextFrame(h);
+    assert.equal(h.client.count("tab.list"), lists + 1);
+    assert.deepEqual(labels(h), ["◒ a", "b", "◒ c"]);
+    assert.deepEqual(h.logs, ["started", "connected, 3 tabs"]);
+    assert.equal(h.readState().tabs["w1:t1"].base, "a");
+    assert.equal(h.readState().tabs["w1:t3"].base, "c");
+  });
+});
+
+test("spinner: stop with restore puts plain names back whatever frame shows, and leaves no timer", async () => {
+  await withDaemon({ config: spinConfig(), tabs: spinTabs() }, async (h) => {
+    await h.boot();
+    await nextFrame(h);
+    await nextFrame(h);
+    assert.deepEqual(labels(h), ["◑ a", "b", "◑ c"]);
+    assert.equal(await h.daemon.stop({ restore: true }), true);
+    assert.deepEqual(labels(h), ["a", "b", "c"]);
+    assert.equal(h.timers.pending.size, 0);
+    const renames = h.client.renames.length;
+    await h.timers.advance(10000);
+    assert.equal(h.client.renames.length, renames);
+  });
+});
+
+test("spinner: a tick that fired just before stop with restore renames nothing after the restore", async () => {
+  await withDaemon({ config: spinConfig(), tabs: spinTabs() }, async (h) => {
+    await h.boot();
+    await h.timers.advance(SPIN_MS);
+    assert.equal(armed(h), 1, "the tick fired, its resync is debounced");
+    assert.equal(spinners(h), 0);
+    assert.equal(await h.daemon.stop({ restore: true }), true);
+    assert.deepEqual(labels(h), ["a", "b", "c"]);
+    assert.equal(h.timers.pending.size, 0);
+    const renames = h.client.renames.length;
+    await h.timers.advance(10000);
+    assert.equal(h.client.renames.length, renames);
+  });
+});
+
+test("spinner: a frame resync in flight during stop with restore renames nothing after the restore", async () => {
+  await withDaemon({ config: spinConfig(), tabs: spinTabs() }, async (h) => {
+    await h.boot();
+    let release;
+    h.client.gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    await h.timers.advance(SPIN_MS + 100);
+    assert.equal(h.client.listInFlight, 1, "the frame's tab.list is in flight");
+    const from = h.client.renames.length;
+    const stopping = h.daemon.stop({ restore: true });
+    await settle();
+    release();
+    assert.equal(await stopping, true);
+    assert.deepEqual(renamesSince(h, from), ["w1:t1=a", "w1:t3=c"], "only the restore renamed");
+    assert.deepEqual(labels(h), ["a", "b", "c"]);
+    assert.equal(h.timers.pending.size, 0);
+    await h.timers.advance(10000);
+    assert.equal(h.client.renames.length, from + 2);
+  });
+});
+
+test("spinner: a disconnect clears the timer and the reconnect re-arms it on the current frame", async () => {
+  await withDaemon({ config: spinConfig(), tabs: spinTabs() }, async (h) => {
+    await h.boot();
+    await nextFrame(h);
+    assert.deepEqual(labels(h), ["◓ a", "b", "◓ c"]);
+    h.client.up = false;
+    h.client.lifecycle().close();
+    await settle();
+    assert.equal(spinners(h), 0, "cleared on disconnect");
+    const renames = h.client.renames.length;
+    h.client.up = true;
+    await h.timers.advance(500);
+    assert.equal(h.logs.at(-1), "connected, 3 tabs");
+    assert.equal(spinners(h), 1, "re-armed on reconnect");
+    assert.equal(h.client.renames.length, renames, "the reconnect keeps the frame that shows");
+    await nextFrame(h);
+    assert.deepEqual(labels(h), ["◑ a", "b", "◑ c"]);
+    assert.equal(spinners(h), 1);
+  });
+});
+
+test("spinner: setConfig turning it off clears the timer and puts the static icon back, on again restarts it", async () => {
+  await withDaemon({ config: spinConfig(), tabs: spinTabs() }, async (h) => {
+    await h.boot();
+    await nextFrame(h);
+    await nextFrame(h);
+    assert.deepEqual(labels(h), ["◑ a", "b", "◑ c"]);
+    await h.daemon.setConfig(defaultConfig());
+    assert.deepEqual(labels(h), ["◐ a", "b", "◐ c"]);
+    assert.equal(spinners(h), 0);
+    assert.equal(armed(h), 0, "the echoes of the static icons cause no resync");
+    const renames = h.client.renames.length;
+    await h.timers.advance(10000);
+    assert.equal(h.client.renames.length, renames);
+
+    await h.daemon.setConfig(spinConfig());
+    assert.equal(
+      h.client.renames.length,
+      renames,
+      "the first frame is the static icon of the default ask preset, nothing to rename",
+    );
+    assert.equal(spinners(h), 1);
+    await nextFrame(h);
+    assert.deepEqual(labels(h), ["◓ a", "b", "◓ c"]);
+  });
+});
+
+test("spinner: a tab in a rename fight's cool-down keeps no timer alive, and spins again after it", async () => {
+  const tabs = [tabOf("w1:t1", "a"), tabOf("w1:t2", "build", "working")];
+  await withDaemon({ config: spinConfig(), tabs, heartbeatMs: 1e9 }, async (h) => {
+    const control = fighter(h, "w1:t2");
+    await h.boot();
+    await h.timers.advance(1000);
+    assert.equal(renamesOf(h, "w1:t2"), 3);
+    assert.equal(coolLogs(h).length, 1);
+    assert.deepEqual(labels(h), ["a", "build"]);
+    assert.equal(spinners(h), 0, "the only working tab is cooling, no timer");
+    control.on = false;
+    const lists = h.client.count("tab.list");
+    await h.timers.advance(58000); // t = 59000, the cool-down ends at 60300
+    assert.equal(h.client.count("tab.list"), lists, "no frame resyncs during the cool-down");
+    assert.equal(spinners(h), 0);
+    assert.equal(renamesOf(h, "w1:t2"), 3);
+    await h.timers.advance(1500); // t = 60500
+    assert.deepEqual(labels(h), ["a", "◐ build"], "back on the first frame");
+    assert.equal(spinners(h), 1, "the end of the cool-down re-arms the timer");
+    await nextFrame(h);
+    assert.deepEqual(labels(h), ["a", "◓ build"]);
+    assert.equal(spinners(h), 1);
+  });
+});
+
+test("spinner: a working tab the config skips arms no timer", async () => {
+  await withDaemon({ config: spinConfig(), tabs: [tabOf("w1:t1", "a"), tabOf("w1:t2", "2", "working")] }, async (h) => {
+    await h.boot();
+    assert.deepEqual(labels(h), ["a", "2"]);
+    assert.equal(spinners(h), 0);
+    await h.timers.advance(10000);
+    assert.equal(h.client.count("tab.list"), 1, "no frame resyncs");
+    assert.equal(h.client.renames.length, 0);
+    assert.equal(spinners(h), 0);
+  });
+});
+
+test("spinner: a single frame replaces the working icon and arms no timer", async () => {
+  const config = spinConfig();
+  config.spinner.frames = ["◆"];
+  await withDaemon({ config, tabs: spinTabs() }, async (h) => {
+    await h.boot();
+    assert.deepEqual(labels(h), ["◆ a", "b", "◆ c"]);
+    assert.equal(spinners(h), 0);
+    assert.equal(armed(h), 0);
+    for (let i = 0; i < 5; i += 1) await nextFrame(h);
+    assert.equal(h.client.count("tab.list"), 1, "no frame resyncs");
+    assert.equal(h.client.renames.length, 2);
+    assert.deepEqual(labels(h), ["◆ a", "b", "◆ c"]);
+    assert.equal(spinners(h), 0);
+  });
+});
