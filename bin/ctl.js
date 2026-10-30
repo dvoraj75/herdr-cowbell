@@ -42,6 +42,14 @@ const realDeps = {
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 };
 
+// A reader that closes early (`status | head -1`) makes stdout emit EPIPE.
+// That is a normal end of output, not a failure.
+process.stdout.on("error", (error) => {
+  if (error && error.code === "EPIPE") process.exit();
+  process.stderr.write(`cowbell: ${error && error.message}\n`);
+  process.exit(1);
+});
+
 try {
   process.exitCode = await run(process.argv.slice(2), realDeps);
 } catch (error) {
