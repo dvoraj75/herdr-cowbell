@@ -1,0 +1,119 @@
+# Runs the real plugin against a throwaway sandbox herdr server (scripts/smoke.sh),
+# on the minimum herdr the manifest promises and on the latest release.
+name: Smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: smoke (${{ matrix.herdr }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        herdr: [min, latest]
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Resolve herdr version
+        id: resolve
+        shell: bash
+        env:
+          HERDR_CHANNEL: ${{ matrix.herdr }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          case "$HERDR_CHANNEL" in
+            min)
+              # sed -n with p works the same on GNU and BSD sed.
+              ver=$(sed -n 's/^min_herdr_version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' herdr-plugin.toml | head -n 1)
+              if ! [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "min_herdr_version not found or not x.y.z in herdr-plugin.toml: '$ver'" >&2
+                exit 1
+              fi
+              tag="v$ver"
+              ;;
+            latest)
+              # Latest non-prerelease; preview-* tags are excluded.
+              tag=$(gh api repos/herdrdev/herdr/releases/latest --jq .tag_name)
+              ;;
+            *)
+              echo "unknown herdr channel: '$HERDR_CHANNEL'" >&2
+              exit 1
+              ;;
+          esac
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "unexpected herdr tag: '$tag'" >&2
+            exit 1
+          fi
+          echo "herdr tag: $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      # The release asset is downloaded directly instead of via herdr.dev/install.sh,
+      # which has no version pin. The sha256 is checked against the digest the
+      # releases API reports for the asset.
+      - name: Install herdr
+        shell: bash
+        env:
+          HERDR_TAG: ${{ steps.resolve.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS/$RUNNER_ARCH" in
+            Linux/X64) asset=herdr-linux-x86_64 ;;
+            Linux/ARM64) asset=herdr-linux-aarch64 ;;
+            macOS/ARM64) asset=herdr-macos-aarch64 ;;
+            macOS/X64) asset=herdr-macos-x86_64 ;;
+            *)
+              echo "unsupported runner: $RUNNER_OS/$RUNNER_ARCH" >&2
+              exit 1
+              ;;
+          esac
+          dl="$RUNNER_TEMP/herdr-dl"
+          bin="$RUNNER_TEMP/herdr-bin"
+          mkdir -p "$dl" "$bin"
+          gh release download "$HERDR_TAG" --repo herdrdev/herdr --pattern "$asset" --dir "$dl"
+          want=$(gh api "repos/herdrdev/herdr/releases/tags/$HERDR_TAG" \
+            --jq ".assets[] | select(.name==\"$asset\") | .digest")
+          want="${want#sha256:}"
+          if ! [[ "$want" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "no usable sha256 digest for $asset in $HERDR_TAG: '$want'" >&2
+            exit 1
+          fi
+          got=$(shasum -a 256 "$dl/$asset" | cut -d ' ' -f 1)
+          if [ "$got" != "$want" ]; then
+            echo "sha256 mismatch for $asset: got $got, want $want" >&2
+            exit 1
+          fi
+          mv "$dl/$asset" "$bin/herdr"
+          chmod +x "$bin/herdr"
+          echo "$bin" >> "$GITHUB_PATH"
+      - name: Versions
+        shell: bash
+        run: |
+          herdr --version
+          node --version
+      # /tmp/cbs, not $RUNNER_TEMP: herdr's unix socket path must fit in 104
+      # bytes and RUNNER_TEMP is far longer than that on macOS.
+      # GNU timeout is missing on macOS runners; smoke.sh has its own 120 s
+      # budget and the step timeout-minutes is the outer cap.
+      - name: Smoke
+        timeout-minutes: 5
+        shell: bash
+        run: scripts/smoke.sh /tmp/cbs
