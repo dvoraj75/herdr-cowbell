@@ -1,0 +1,14 @@
+# herdr config for the demo sandbox (copied to $SB/c/herdr/config.toml).
+# No first-run dialog, no sidebar (the tab bar is the subject), and no
+# toasts or sounds while the driver flips agent states.
+onboarding = false
+
+[ui]
+sidebar_start_collapsed = true
+sidebar_collapsed_mode = "hidden"
+
+[ui.toast]
+delivery = "off"
+
+[ui.sound]
+enabled = false
