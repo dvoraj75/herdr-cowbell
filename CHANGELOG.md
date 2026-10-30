@@ -4,9 +4,13 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## Unreleased
 
-### Added
+### Fixed
 
+- *Cowbell: on/off* now starts cowbell when no daemon runs, whatever the saved setting says; the first press after install shows icons instead of switching off (#23).
+### Added
 - Optional working spinner: `spinner.enabled` (off by default), `spinner.frames` and `spinner.interval_ms` (at least 1000 ms). One timer drives every working tab; each frame is a tab rename (#9).
+- CI on every push to main and every PR: node --test on Node 18, 20 and 22 on Linux and macOS, plus a version-consistency check (scripts/check-version.js) (#18).
+
 
 ## 0.1.0 — 2026-10-30
 

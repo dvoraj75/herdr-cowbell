@@ -432,15 +432,61 @@ test("off with an unreachable herdr exits 1 but the flag stays written", inWorld
   assert.deepEqual(w.out, []);
 }));
 
-test("toggle flips between off and on", inWorld(async (w) => {
-  w.client = fakeClient([]);
+test("toggle with cowbell on and no daemon starts one", inWorld(async (w) => {
   assert.equal(await run(["toggle"], w.deps), 0);
+  assert.equal(w.spawns, 1);
+  assert.deepEqual(w.kills, []);
+  assert.equal(isEnabled(w.stateDir), true);
+  assert.deepEqual(w.out, [`started (pid ${FAKE_PID})`]);
+}));
+
+test("toggle with cowbell on and a live daemon behaves like off", inWorld(async (w) => {
+  w.writePidfile(321);
+  assert.equal(await run(["toggle"], w.deps), 0);
+  assert.deepEqual(w.kills, [[321, "SIGTERM"]]);
   assert.equal(isEnabled(w.stateDir), false);
   assert.equal(w.spawns, 0);
+  assert.deepEqual(w.out, ["stopped"]);
+}));
 
+test("toggle with cowbell off starts a daemon and saves on", inWorld(async (w) => {
+  setEnabled(w.stateDir, false);
   assert.equal(await run(["toggle"], w.deps), 0);
   assert.equal(isEnabled(w.stateDir), true);
   assert.equal(w.spawns, 1);
+  assert.deepEqual(w.kills, []);
+  assert.deepEqual(w.out, [`started (pid ${FAKE_PID})`]);
+}));
+
+test("toggle with a stale pidfile counts as no daemon and starts one", inWorld(async (w) => {
+  fs.mkdirSync(w.stateDir, { recursive: true });
+  fs.writeFileSync(w.pidfile(), "999\n"); // not in the live set
+  assert.equal(await run(["toggle"], w.deps), 0);
+  assert.deepEqual(w.kills, []);
+  assert.equal(w.spawns, 1);
+  assert.equal(isEnabled(w.stateDir), true);
+  assert.deepEqual(w.out, [`started (pid ${FAKE_PID})`]);
+}));
+
+test("toggle with a stale pidfile and cowbell off starts one and saves on", inWorld(async (w) => {
+  setEnabled(w.stateDir, false);
+  fs.writeFileSync(w.pidfile(), "999\n"); // not in the live set
+  assert.equal(await run(["toggle"], w.deps), 0);
+  assert.deepEqual(w.kills, []);
+  assert.equal(w.spawns, 1);
+  assert.equal(isEnabled(w.stateDir), true);
+}));
+
+test("two toggles from a fresh install start the daemon, then stop it", inWorld(async (w) => {
+  assert.equal(await run(["toggle"], w.deps), 0);
+  assert.equal(w.spawns, 1);
+  assert.equal(isEnabled(w.stateDir), true);
+
+  assert.equal(await run(["toggle"], w.deps), 0);
+  assert.equal(w.spawns, 1);
+  assert.deepEqual(w.kills, [[FAKE_PID, "SIGTERM"]]);
+  assert.equal(isEnabled(w.stateDir), false);
+  assert.deepEqual(w.out, [`started (pid ${FAKE_PID})`, "stopped"]);
 }));
 
 test("start after off does not spawn (watchdog stays quiet)", inWorld(async (w) => {
@@ -606,7 +652,7 @@ test("manifest declares the startup, watchdog event and four actions", () => {
   const command = (block) => JSON.stringify(JSON.parse(block.match(/^command = (\[.*\])$/m)[1]));
   const start = JSON.stringify(["node", "bin/ctl.js", "start"]);
 
-  assert.match(text, /^version = "0\.1\.0"$/m);
+  assert.match(text, /^version = "\d+\.\d+\.\d+"$/m);
 
   const startup = blocks("startup");
   assert.equal(startup.length, 1);
