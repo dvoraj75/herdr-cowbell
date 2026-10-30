@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [18, 20, 22]
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Node version
+        run: node --version
+      # GNU timeout is missing on macOS runners; there the step
+      # timeout-minutes enforces the cap.
+      - name: Test
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          if command -v timeout >/dev/null 2>&1; then
+            timeout 300 node --test
+          else
+            node --test
+          fi
+
+  versions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Node version
+        run: node --version
+      - name: Check versions
+        run: node scripts/check-version.js

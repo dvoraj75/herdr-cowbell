@@ -8,7 +8,8 @@
     "node": ">=18"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "check-version": "node scripts/check-version.js"
   },
   "license": "MIT"
 }
