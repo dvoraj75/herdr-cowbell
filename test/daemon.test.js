@@ -25,7 +25,7 @@ function fakeTimers() {
   return {
     setTimeout(fn, ms) {
       seq += 1;
-      pending.set(seq, { at: now + ms, fn });
+      pending.set(seq, { at: now + ms, ms, fn });
       return seq;
     },
     clearTimeout(id) {
@@ -192,6 +192,8 @@ async function withDaemon(options, body) {
     onExit: (code) => exits.push(code),
     pluginId: options.pluginId || null,
     selfCheckMs: options.selfCheckMs,
+    heartbeatMs: options.heartbeatMs,
+    churn: options.churn,
   });
   const stateFile = path.join(dir, "state.json");
   const h = {
@@ -203,6 +205,7 @@ async function withDaemon(options, body) {
     exits,
     stateFile,
     readState: () => JSON.parse(fs.readFileSync(stateFile, "utf8")),
+    heartbeatMs: options.heartbeatMs ?? 60000,
     async boot() {
       await daemon.start();
       await settle();
@@ -221,6 +224,9 @@ async function withDaemon(options, body) {
 }
 
 const labels = (h) => h.client.tabs.map((t) => t.label);
+// Pending timers other than the heartbeat, which is always armed while connected.
+const armed = (h) => Array.from(h.timers.pending.values()).filter((t) => t.ms !== h.heartbeatMs).length;
+const heartbeats = (h) => Array.from(h.timers.pending.values()).filter((t) => t.ms === h.heartbeatMs).length;
 const withAuto = () => ({ ...defaultConfig(), include_auto_named: true });
 const retryDelays = (logs) =>
   logs
@@ -354,7 +360,7 @@ test("positions count per workspace, not over all tabs", async () => {
 test("our own tab.renamed echo does not arm the debounce or cause a resync", async () => {
   await withDaemon({ tabs: [tabOf("w1:t1", "api", "working")] }, async (h) => {
     await h.boot();
-    assert.equal(h.timers.pending.size, 0);
+    assert.equal(armed(h), 0);
     await h.timers.advance(1000);
     assert.equal(h.client.count("tab.list"), 1);
   });
@@ -366,7 +372,7 @@ test("a foreign rename becomes the new base and the icon is re-applied", async (
     assert.deepEqual(labels(h), ["◐ old"]);
     h.client.tabs[0].label = "api";
     h.client.emit("tab.renamed", { tab_id: "w1:t1", label: "api" });
-    assert.equal(h.timers.pending.size, 1);
+    assert.equal(armed(h), 1);
     await h.timers.advance(100);
     assert.deepEqual(labels(h), ["◐ api"]);
     assert.equal(h.readState().tabs["w1:t1"].base, "api");
@@ -439,7 +445,7 @@ test("an echo lost with the old connection does not swallow a later foreign rena
     assert.equal(h.client.renames.length, 1, "no write to the tab since the reconnect");
     h.client.tabs[0].label = "◐ api";
     h.client.emit("tab.renamed", { tab_id: "w1:t1", label: "◐ api" });
-    assert.equal(h.timers.pending.size, 1, "treated as foreign, resync armed");
+    assert.equal(armed(h), 1, "treated as foreign, resync armed");
   });
 });
 
@@ -451,7 +457,7 @@ test("events in the window produce one resync after 100 ms from the first event"
     h.client.emit("tab.focused");
     await h.timers.advance(60);
     h.client.emit("tab.focused");
-    assert.equal(h.timers.pending.size, 1, "second event arms no new timer");
+    assert.equal(armed(h), 1, "second event arms no new timer");
     await h.timers.advance(39);
     assert.equal(h.client.count("tab.list"), 1, "not yet");
     await h.timers.advance(1);
@@ -696,7 +702,7 @@ test("a failed rename leaves no echo behind that would swallow a later user rena
     // The user types the very label we failed to write.
     h.client.tabs[0].label = "◐ api";
     h.client.emit("tab.renamed", { tab_id: "w1:t1", label: "◐ api" });
-    assert.equal(h.timers.pending.size, 1, "treated as foreign, resync armed");
+    assert.equal(armed(h), 1, "treated as foreign, resync armed");
   });
 });
 
@@ -789,7 +795,7 @@ test("a late onClose or onError of an old subscription does not start another ba
     }
     await settle();
     assert.equal(h.logs.length, logCount);
-    assert.equal(h.timers.pending.size, 0);
+    assert.equal(armed(h), 0);
     assert.equal(h.client.open().length, 2);
   });
 });
@@ -835,7 +841,7 @@ test("a status subscription that never starts during a flush disconnects, and re
     h.client.manualStart = false;
     await h.timers.advance(500);
     assert.equal(h.logs.at(-1), "connected, 1 tabs");
-    assert.equal(h.timers.pending.size, 0, "no start timeout left behind");
+    assert.equal(armed(h), 0, "no start timeout left behind");
     const lists = h.client.count("tab.list");
     h.client.emit("tab.focused", {});
     await h.timers.advance(100);
@@ -883,7 +889,7 @@ test("stop is idempotent, closes everything, saves state and leaves no timers", 
   await withDaemon({ tabs: [tabOf("w1:t1", "api", "working")] }, async (h) => {
     await h.boot();
     h.client.emit("tab.focused", {});
-    assert.equal(h.timers.pending.size, 1);
+    assert.equal(armed(h), 1);
     fs.rmSync(h.stateFile);
     await h.daemon.stop();
     await h.daemon.stop();
@@ -1136,7 +1142,7 @@ test("refresh during backoff cancels the retry timer and connects now", async ()
     h.client.up = true;
     await h.daemon.refresh();
     await settle();
-    assert.equal(h.timers.pending.size, 0, "retry timer cancelled");
+    assert.equal(armed(h), 0, "retry timer cancelled");
     assert.deepEqual(labels(h), ["◐ api"]);
     assert.ok(h.logs.some((l) => l.startsWith("connected")));
   });
@@ -1283,5 +1289,287 @@ test("self-check: a transport error is ignored and the check is tried again late
     await h.daemon.refresh();
     assert.equal(listed(h).length, 2);
     assert.deepEqual(h.exits, []);
+  });
+});
+
+// ---- heartbeat ----
+
+test("heartbeat: with no events, a plugin disabled meanwhile is noticed after heartbeatMs, restored and exits 0", async () => {
+  await withDaemon({ ...SELF, tabs: [tabOf("w1:t1", "api", "working")], before: withPlugins([enabledPlugin]) }, async (h) => {
+    await h.boot();
+    assert.deepEqual(labels(h), ["◐ api"]);
+    assert.equal(heartbeats(h), 1);
+    h.client.plugins = [{ plugin_id: "cowbell", enabled: false }];
+    await h.timers.advance(59999);
+    assert.deepEqual(h.exits, [], "not before the heartbeat");
+    assert.equal(listed(h).length, 1);
+    await h.timers.advance(1 + 100);
+    assert.equal(listed(h).length, 2);
+    assert.deepEqual(labels(h), ["api"]);
+    assert.deepEqual(h.exits, [0]);
+    assert.equal(h.timers.pending.size, 0, "nothing scheduled after the stop");
+  });
+});
+
+test("heartbeat: with the plugin enabled and nothing changed it resyncs, renames nothing and re-arms", async () => {
+  await withDaemon({ ...SELF, tabs: [tabOf("w1:t1", "api", "working")], before: withPlugins([enabledPlugin]) }, async (h) => {
+    await h.boot();
+    assert.equal(h.client.renames.length, 1);
+    await h.timers.advance(60100);
+    assert.equal(h.client.count("tab.list"), 2);
+    assert.equal(listed(h).length, 2);
+    assert.equal(heartbeats(h), 1, "re-armed");
+    await h.timers.advance(60000);
+    assert.equal(h.client.count("tab.list"), 3);
+    assert.equal(h.client.renames.length, 1);
+    assert.equal(heartbeats(h), 1);
+    assert.deepEqual(h.exits, []);
+  });
+});
+
+test("heartbeat: never two at once, cleared on disconnect, re-armed on reconnect, gone after stop", async () => {
+  await withDaemon({ tabs: [tabOf("w1:t1", "api")], heartbeatMs: 20000 }, async (h) => {
+    await h.boot();
+    assert.equal(heartbeats(h), 1);
+    await h.daemon.refresh();
+    h.client.emit("tab.focused", {});
+    await h.timers.advance(100);
+    assert.equal(heartbeats(h), 1, "events and refreshes arm no second heartbeat");
+    h.client.up = false;
+    h.client.lifecycle().close();
+    await settle();
+    assert.equal(heartbeats(h), 0, "cleared on disconnect");
+    const lists = h.client.count("tab.list");
+    h.client.up = true;
+    await h.timers.advance(500);
+    assert.equal(h.logs.at(-1), "connected, 1 tabs");
+    assert.equal(heartbeats(h), 1, "re-armed on reconnect");
+    assert.equal(h.client.count("tab.list"), lists + 1);
+    await h.daemon.stop();
+    assert.equal(h.timers.pending.size, 0);
+    await h.timers.advance(600000);
+    assert.equal(h.client.count("tab.list"), lists + 1, "no heartbeat resync after stop");
+  });
+});
+
+// ---- rename fights ----
+
+/**
+ * Another renamer that answers every rename of ours of tab `id` with its own
+ * rename to `name`, after our echo, like a plugin reacting to tab.renamed.
+ * @returns {{on: boolean}} Set `on` to false to make it stop.
+ */
+function fighter(h, id, name = "build") {
+  const control = { on: true };
+  h.client.onRename = (params) => {
+    if (!control.on || params.tab_id !== id) return;
+    queueMicrotask(() => {
+      const tab = h.client.tabs.find((t) => t.tab_id === id);
+      tab.label = name;
+      h.client.emit("tab.renamed", { tab_id: id, workspace_id: tab.workspace_id, label: name });
+    });
+  };
+  return control;
+}
+
+const renamesOf = (h, id) => h.client.renames.filter((r) => r.tab_id === id).length;
+const coolLogs = (h) => h.logs.filter((l) => l.includes("leaving it alone"));
+const fightTabs = () => [tabOf("w1:t1", "api", "working"), tabOf("w1:t2", "build", "working")];
+
+test("a renamer that fights back makes the daemon leave the tab alone after 3 fights, logging once", async () => {
+  await withDaemon({ tabs: fightTabs(), before: (h) => fighter(h, "w1:t2") }, async (h) => {
+    await h.boot();
+    await h.timers.advance(1000);
+    assert.equal(renamesOf(h, "w1:t2"), 3, "renamed 3 times, then left alone");
+    assert.deepEqual(coolLogs(h), ["tab w1:t2: renamed by someone else 3 times in 10 s, leaving it alone for 60 s"]);
+    assert.deepEqual(labels(h), ["◐ api", "build"]);
+    // The entry keeps the foreign base and the label we last really wrote.
+    assert.deepEqual(h.readState().tabs["w1:t2"], { base: "build", lastWritten: "◐ build", autoNamed: false });
+    // The heartbeat resync at 60 s, still inside the cool-down, leaves the tab alone too.
+    const lists = h.client.count("tab.list");
+    await h.timers.advance(59200);
+    assert.equal(h.client.count("tab.list"), lists + 1);
+    assert.equal(renamesOf(h, "w1:t2"), 3);
+    assert.equal(renamesOf(h, "w1:t1"), 1);
+    assert.equal(coolLogs(h).length, 1);
+    await h.daemon.stop();
+    assert.equal(h.timers.pending.size, 0, "the end-of-cool-down timer is cleared by stop");
+  });
+});
+
+test("after the cool-down the icon comes back once, without an event", async () => {
+  await withDaemon({ tabs: fightTabs(), heartbeatMs: 1e9 }, async (h) => {
+    const control = fighter(h, "w1:t2");
+    await h.boot();
+    await h.timers.advance(1000);
+    assert.equal(renamesOf(h, "w1:t2"), 3);
+    control.on = false;
+    const lists = h.client.count("tab.list");
+    await h.timers.advance(58000); // t = 59000, the cool-down ends at 60300
+    assert.equal(h.client.count("tab.list"), lists, "no resync without a reason");
+    await h.timers.advance(1500);
+    assert.equal(h.client.count("tab.list"), lists + 1);
+    assert.equal(renamesOf(h, "w1:t2"), 4);
+    assert.deepEqual(labels(h), ["◐ api", "◐ build"]);
+    await h.timers.advance(600000);
+    assert.equal(renamesOf(h, "w1:t2"), 4);
+  });
+});
+
+test("a second round of fights doubles the cool-down", async () => {
+  await withDaemon({ tabs: fightTabs(), before: (h) => fighter(h, "w1:t2") }, async (h) => {
+    await h.boot();
+    await h.timers.advance(1000);
+    assert.equal(renamesOf(h, "w1:t2"), 3);
+    await h.timers.advance(60000); // t = 61000: the first cool-down ended at 60300
+    assert.equal(renamesOf(h, "w1:t2"), 6, "three more renames, three more fights");
+    assert.deepEqual(coolLogs(h), [
+      "tab w1:t2: renamed by someone else 3 times in 10 s, leaving it alone for 60 s",
+      "tab w1:t2: renamed by someone else 3 times in 10 s, leaving it alone for 120 s",
+    ]);
+    await h.timers.advance(119000); // t = 180000, the second one ends at 180700
+    assert.equal(renamesOf(h, "w1:t2"), 6);
+    await h.timers.advance(2000);
+    assert.equal(renamesOf(h, "w1:t2"), 9);
+    assert.equal(coolLogs(h).length, 3);
+    assert.match(coolLogs(h)[2], /for 240 s$/);
+  });
+});
+
+test("a single user rename shortly after ours starts no cool-down", async () => {
+  await withDaemon({ tabs: [tabOf("w1:t1", "api", "working")] }, async (h) => {
+    await h.boot();
+    await h.timers.advance(1000);
+    h.client.tabs[0].label = "web";
+    h.client.emit("tab.renamed", { tab_id: "w1:t1", label: "web" });
+    await h.timers.advance(100);
+    assert.deepEqual(labels(h), ["◐ web"]);
+    h.client.tabs[0].agent_status = "done";
+    h.client.emitStatus("w1:p1", "done");
+    await h.timers.advance(100);
+    assert.deepEqual(labels(h), ["✓ web"]);
+    assert.deepEqual(coolLogs(h), []);
+  });
+});
+
+test("a closed tab's fight record and cool-down timer are dropped", async () => {
+  await withDaemon({ tabs: fightTabs(), churn: { coolMs: 30000 } }, async (h) => {
+    const control = fighter(h, "w1:t2");
+    await h.boot();
+    await h.timers.advance(1000);
+    assert.equal(coolLogs(h).length, 1);
+    assert.equal(armed(h), 1, "the end-of-cool-down timer");
+    control.on = false;
+    h.client.tabs.pop();
+    h.client.emit("tab.closed", { tab_id: "w1:t2" });
+    await h.timers.advance(100);
+    assert.equal(armed(h), 0, "cleared with the prune");
+    // The same id again (herdr reuses ids across restarts): not cooling.
+    h.client.tabs.push(tabOf("w1:t2", "build", "working"));
+    h.client.emit("tab.created", { tab_id: "w1:t2" });
+    await h.timers.advance(100);
+    assert.deepEqual(labels(h), ["◐ api", "◐ build"]);
+  });
+});
+
+// ---- regressions: reconnect, conn 2 rebuild, closes ----
+
+for (const which of ["lifecycle", "status"]) {
+  test(`events_lost on the ${which} connection reconnects after 500 ms with a full resync`, async () => {
+    await withDaemon({ tabs: [tabOf("w1:t1", "api")] }, async (h) => {
+      await h.boot();
+      const sub = which === "lifecycle" ? h.client.lifecycle() : h.client.statusSub();
+      sub.cb.onError(new HerdrError("events_lost", "lagged", "events.subscribe"));
+      await settle();
+      assert.equal(h.client.open().length, 0);
+      // Missed while the events were lost.
+      h.client.tabs[0].agent_status = "working";
+      const lists = h.client.count("tab.list");
+      const paneLists = h.client.count("pane.list");
+      await h.timers.advance(499);
+      assert.equal(h.client.count("tab.list"), lists, "not before baseMs");
+      await h.timers.advance(1);
+      assert.equal(h.logs.at(-1), "connected, 1 tabs");
+      assert.equal(h.client.count("pane.list"), paneLists + 1);
+      assert.equal(h.client.count("tab.list"), lists + 1);
+      assert.equal(h.client.open().length, 2);
+      assert.deepEqual(labels(h), ["◐ api"]);
+    });
+  });
+}
+
+test("conn 2 rebuild: the new subscription starts before the resync's tab.list, the old one closes after it started", async () => {
+  await withDaemon({ tabs: [tabOf("w1:t1", "api", "working")] }, async (h) => {
+    await h.boot();
+    const request = h.client.request;
+    h.client.request = (method, params) => {
+      h.client.trace.push(`req:${method}`);
+      return request(method, params);
+    };
+    const from = h.client.trace.length;
+    h.client.manualStart = true;
+    h.client.panes = [{ pane_id: "w1:p1" }, { pane_id: "w1:p3" }];
+    h.client.emit("pane.created", { pane_id: "w1:p3" });
+    await h.timers.advance(100);
+    assert.deepEqual(h.client.trace.slice(from), ["req:pane.list"], "waits for the start");
+    assert.equal(h.client.subs[1].closed, false, "the old one stays open meanwhile");
+    h.client.subs[2].start();
+    await settle();
+    assert.deepEqual(h.client.trace.slice(from), ["req:pane.list", "start:3", "close:2", "req:tab.list"]);
+  });
+});
+
+test("a tab closed while its rename is in flight: no crash, no log, entry and echoes gone after tab.closed", async () => {
+  await withDaemon({ tabs: [tabOf("w1:t1", "api"), tabOf("w1:t2", "web")] }, async (h) => {
+    await h.boot();
+    const logCount = h.logs.length;
+    let release;
+    h.client.renameGate = new Promise((resolve) => {
+      release = resolve;
+    });
+    h.client.tabs[1].agent_status = "working";
+    h.client.emitStatus("w1:p1", "working");
+    await h.timers.advance(100);
+    assert.equal(h.client.count("tab.rename"), 1, "the rename is in flight");
+    // The tab closes before herdr handles the rename.
+    h.client.tabs.pop();
+    h.client.renameGate = null;
+    release();
+    await settle();
+    assert.equal(h.logs.length, logCount, "tab_not_found is not logged");
+    assert.equal(h.client.open().length, 2, "no disconnect");
+    assert.ok(h.readState().tabs["w1:t2"], "kept until the tab.closed resync");
+    h.client.emit("tab.closed", { tab_id: "w1:t2" });
+    await h.timers.advance(100);
+    assert.deepEqual(Object.keys(h.readState().tabs), ["w1:t1"]);
+    assert.equal(h.logs.length, logCount);
+    // A new tab with the reused id and that very label is somebody else's.
+    h.client.tabs.push(tabOf("w1:t2", "◐ web", "idle"));
+    h.client.emit("tab.renamed", { tab_id: "w1:t2", label: "◐ web" });
+    assert.equal(armed(h), 1, "treated as foreign, resync armed");
+  });
+});
+
+test("closing a tab renames each later auto-named tab once to its new position, and the echoes cause nothing more", async () => {
+  const statuses = ["idle", "working", "idle", "done", "idle", "working", "idle", "blocked", "idle", "idle"];
+  const tabs = statuses.map((status, i) => tabOf(`w1:t${i + 1}`, String(i + 1), status));
+  await withDaemon({ config: withAuto(), tabs }, async (h) => {
+    await h.boot();
+    assert.deepEqual(labels(h), ["1", "◐ 2", "3", "✓ 4", "5", "◐ 6", "7", "? 8", "9", "10"]);
+    const before = h.client.renames.length;
+    const lists = h.client.count("tab.list");
+    h.client.tabs.splice(2, 1);
+    h.client.emit("tab.closed", { tab_id: "w1:t3" });
+    await h.timers.advance(100);
+    await h.timers.advance(1000);
+    assert.deepEqual(labels(h), ["1", "◐ 2", "✓ 3", "4", "◐ 5", "6", "? 7", "8", "9"]);
+    const after = h.client.renames.slice(before);
+    assert.equal(after.length, 7);
+    assert.deepEqual(
+      after.map((r) => r.tab_id),
+      ["w1:t4", "w1:t5", "w1:t6", "w1:t7", "w1:t8", "w1:t9", "w1:t10"],
+    );
+    assert.equal(h.client.count("tab.list"), lists + 1, "one resync, the echoes trigger none");
+    assert.equal(armed(h), 0);
   });
 });
