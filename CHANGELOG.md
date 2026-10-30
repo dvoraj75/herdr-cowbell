@@ -4,6 +4,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## Unreleased
 
+### Fixed
+
+- *Cowbell: on/off* now starts cowbell when no daemon runs, whatever the saved setting says; the first press after install shows icons instead of switching off (#23).
 ### Added
 
 - CI on every push to main and every PR: node --test on Node 18, 20 and 22 on Linux and macOS, plus a version-consistency check (scripts/check-version.js) (#18).
