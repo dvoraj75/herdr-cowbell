@@ -5,4 +5,30 @@ min_herdr_version = "0.9.0" # placeholder until verified against a real release
 description = "Agent status on your tabs: ◐ working, ? waiting for you, ✓ done."
 platforms = ["linux", "macos"]
 
-# The startup hook, events and actions arrive with #6.
+[[startup]]
+command = ["node", "bin/ctl.js", "start"]
+
+# Watchdog: restarts the daemon if it died. `start` is a no-op while it runs.
+[[events]]
+on = "pane.agent_detected"
+command = ["node", "bin/ctl.js", "start"]
+
+[[actions]]
+id = "toggle"
+title = "Cowbell: on/off"
+command = ["node", "bin/ctl.js", "toggle"]
+
+[[actions]]
+id = "off"
+title = "Cowbell: off and remove icons"
+command = ["node", "bin/ctl.js", "off"]
+
+[[actions]]
+id = "refresh"
+title = "Cowbell: refresh now"
+command = ["node", "bin/ctl.js", "refresh"]
+
+[[actions]]
+id = "cycle-preset"
+title = "Cowbell: next icon preset"
+command = ["node", "bin/ctl.js", "cycle-preset"]
