@@ -21,10 +21,13 @@
 #
 # Prerequisites: bash >= 3.2 (no bash 4 features, for macOS /bin/bash),
 # herdr (HERDR_BIN or on PATH), node >= 18, perl, ps, awk. Linux or macOS.
-# Every herdr and node call is time-bounded and the whole run stays under
-# 120 s, so CI cannot hang.
+# Every herdr and node call is time-bounded and the whole run, setup
+# included, stays under 120 s, so CI cannot hang.
 # The sandbox files stay in SB for inspection; the next run removes them.
 set -eEuo pipefail
+# The clock for the whole run: the budget and the printed elapsed time both
+# count from here, setup included.
+SECONDS=0
 
 # --- 0. herdr binary, then drop the session environment --------------------
 # HERDR_BIN is itself a HERDR_* variable: read it before the unset loop.
@@ -49,10 +52,13 @@ PLUGIN_ID=dvoraj75.cowbell
 MARKER=.cowbell-smoke
 # What a run creates in SB; only these are removed before the next run.
 CREATED="c s plugin sh server.log smoke.pids herdr.err"
-# Time limits, in seconds. Worst case: the budget watchdog fires (BUDGET),
+# Time limits, in seconds, counted from the start of the script. Setup (three
+# calls of at most CALL_LIMIT) ends before the watchdog is armed, which then
+# only gets what is left of BUDGET. Worst case: the watchdog fires at BUDGET,
 # the shell finishes the call it is in (CALL_LIMIT), then the EXIT trap runs
 # its bounded steps (about 40 s: dump 2x5, ctl stop 12, server stop 5, wait
-# for the server 8, TERM/KILL leftovers 3). 65 + 10 + 40 = 115 <= 120.
+# for the server 8, TERM/KILL leftovers 3). 65 + 10 + 40 = 115 <= 120
+# (setup is inside the 65).
 BUDGET=65
 CALL_LIMIT=10
 WAIT_LIMIT=20
@@ -145,6 +151,14 @@ still_same() {
 
 if [[ -e "$SB" || -L "$SB" ]]; then
   [[ -d "$SB" && ! -L "$SB" ]] || prereq "$SB exists and is not a directory"
+  # Another local user must not be able to tamper with the sandbox (swap
+  # $SB/sh or the plugin copy, plant symlinks, edit smoke.pids): an existing
+  # SB must be ours and closed to group and others. Checked before anything
+  # in it is read or removed. `find -perm -g=w` and `-perm -o=w` are POSIX
+  # and work the same on BSD (macOS) and GNU find; stat flags are not.
+  [[ -O "$SB" ]] || prereq "$SB is not owned by you; pick another SB"
+  [[ -z "$(find "$SB" -maxdepth 0 \( -perm -g=w -o -perm -o=w \))" ]] ||
+    prereq "$SB is writable by group or others; chmod go-w it or pick another SB"
   if [[ -n "$(ls -A "$SB")" ]]; then
     [[ -f "$SB/$MARKER" ]] || prereq "$SB is not empty and was not created by this script (no $MARKER); pick another SB"
     if [[ -f "$PIDS" ]]; then
@@ -158,6 +172,8 @@ if [[ -e "$SB" || -L "$SB" ]]; then
   fi
 fi
 mkdir -p "$SB"
+chmod 700 "$SB"
+[[ -O "$SB" && ! -L "$SB" ]] || prereq "$SB is not owned by you; pick another SB"
 touch "$SB/$MARKER"
 mkdir -p "$SB/c/herdr" "$SB/s"
 : > "$PIDS"
@@ -173,7 +189,6 @@ EOF
 chmod +x "$SB/sh"
 
 # --- helpers ----------------------------------------------------------------
-SECONDS=0
 SERVER_PID=
 WATCHDOG_PID=
 IN_CLEANUP=0
@@ -463,11 +478,13 @@ trap 'on_signal "interrupted"' INT HUP
 trap 'on_signal "terminated"' TERM
 trap 'on_signal "run exceeded the ${BUDGET}s budget"' USR1
 
-# Watchdog: after BUDGET seconds, USR1 to this script; its trap fails the
-# run and the EXIT trap cleans up. It checks every second that this script
+# Watchdog: once BUDGET seconds have passed since the start, USR1 to this
+# script; its trap fails the run and the EXIT trap cleans up. It checks every second that this script
 # is still its parent and exits once it is not, so it never signals a
 # reused pid.
-perl -e '($t, $p) = @ARGV; while ($t-- > 0) { sleep 1; exit 0 if getppid() != $p } kill "USR1", $p' "$BUDGET" "$$" &
+remaining=$((BUDGET - SECONDS))
+((remaining >= 1)) || remaining=1
+perl -e '($t, $p) = @ARGV; while ($t-- > 0) { sleep 1; exit 0 if getppid() != $p } kill "USR1", $p' "$remaining" "$$" &
 WATCHDOG_PID=$!
 
 # --- 2. server, empty plugin registry, link a copy -------------------------
@@ -479,21 +496,24 @@ printf 'smoke: ok: sandbox plugin list: %s\n' "$plugins"
 mkdir "$SB/plugin"
 cp -R "$REPO/bin" "$REPO/lib" "$REPO/herdr-plugin.toml" "$REPO/package.json" "$SB/plugin/"
 linked=$(h plugin link "$SB/plugin")
-printf 'smoke: ok: linked %s from %s\n' "$(json result.plugin.plugin_id <<< "$linked")" \
-  "$(json result.plugin.plugin_root <<< "$linked")"
+# Assign first: a failing $(...) inside printf arguments would not trip set -e.
+linked_id=$(json result.plugin.plugin_id <<< "$linked")
+linked_root=$(json result.plugin.plugin_root <<< "$linked")
+printf 'smoke: ok: linked %s from %s\n' "$linked_id" "$linked_root"
 
 # The [[startup]] hook starts the daemon; it runs on server start, not on
 # link. Restart the server to run it.
 stop_server
 start_server
 deadline=$((SECONDS + WAIT_LIMIT))
-until grep -q "connected" "$DAEMON_LOG" 2> /dev/null; do
+# The daemon logs "cowbell: connected, N tabs"; "disconnected" must not match.
+until grep -q ': connected,' "$DAEMON_LOG" 2> /dev/null; do
   ((SECONDS < deadline)) || fail "daemon did not log 'connected' within ${WAIT_LIMIT}s"
   sleep 0.2
 done
 track_daemon || fail "no live daemon of this sandbox in $STATE_DIR/cowbell.pid"
-printf 'smoke: ok: daemon (pid %s) started by the startup hook: %s\n' "$DAEMON_PID" \
-  "$(grep "connected" "$DAEMON_LOG" | tail -n 1)"
+connected_line=$(grep ': connected,' "$DAEMON_LOG" | tail -n 1)
+printf 'smoke: ok: daemon (pid %s) started by the startup hook: %s\n' "$DAEMON_PID" "$connected_line"
 
 # --- 3. workspace and tabs A, B, C, D (D focused) --------------------------
 created=$(h workspace create --label smoke)
