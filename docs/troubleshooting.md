@@ -5,9 +5,9 @@
 - **Other tab renamers.** A tab that another plugin keeps renaming loses its icon for 60 s at a time, up to 15 min. See [When renamers fight](how-it-works.md#when-renamers-fight).
 - **Disable and uninstall can leave icons.** herdr runs no plugin hook for either. Run *Cowbell: off and remove icons* first. See [Uninstalling](#uninstalling).
 - **Off survives reinstall.** herdr keeps the state directory. If you switched cowbell off before, it stays off after you enable or reinstall it. Press *Cowbell: on/off* once.
-- **Auto-named tabs.** herdr cannot turn a renamed tab back into an auto-named one. With `include_auto_named` on, cowbell keeps the number in sync itself. After you switch cowbell off, such a tab keeps its current number as a fixed name. A tab you named with only its position number may be treated as auto-named.
+- **Auto-named tabs.** herdr cannot turn a renamed tab back into an auto-named one. With `include_auto_named` on, cowbell keeps the number in sync itself. After you switch cowbell off, such a tab keeps its current number as a fixed name and no longer follows later moves or closes. A tab you named with only its position number may be treated as auto-named.
 - **Server restart and live handoff.** The startup hook replaces the daemon, so icons return within about a second. Agent states that herdr resets on a handoff show as the reset state.
-- **Rare lock races.** After a crash while a lock is held, two presses of *Cowbell: next icon preset* right after the lock goes stale (10 s) can lose one preset step. Neither this nor a doubled daemon start needs action; only one daemon keeps running.
+- **Rare lock races.** After a crash while a lock is held, two presses of *Cowbell: next icon preset* right after the lock goes stale (10 s) can lose one preset step. A daemon start that crashes during a lock takeover can, with three starts at the same moment, briefly let two of them clean up the same stale lock. Neither this nor a doubled daemon start needs action; only one daemon keeps running.
 - **Refresh while off.** *Cowbell: refresh now* does nothing while cowbell is off.
 - **Config edits.** A hand edit of `config.json` needs a daemon restart. See [When changes apply](configuration.md#when-changes-apply).
 
@@ -67,7 +67,7 @@ config dir: /home/me/.config/herdr/plugins/config/dvoraj75.cowbell
 
 Run *Cowbell: off and remove icons* first. Then disable or uninstall the plugin with herdr's plugin commands.
 
-herdr runs no hook on disable or uninstall. While the daemon runs, its 60 s heartbeat notices that the plugin is gone, restores the names and exits. A daemon that is not running cannot do that, and the icons stay.
+herdr runs no hook on disable or uninstall. While the daemon runs, its 60 s heartbeat notices that the plugin is gone, restores the names and exits. A daemon that is not running cannot do that, and the icons stay. Examples: the plugin is removed while the herdr server is down, or after a server restart once the plugin is already gone.
 
 herdr keeps the config and state directories across uninstall. If cowbell was off, it stays off after a reinstall.
 

@@ -1,14 +1,22 @@
 # herdr-cowbell
 
-A [herdr](https://herdr.dev) plugin that shows your agents' status as an icon in front of the tab name:
+<!-- The herdr badge is updated together with min_herdr_version in herdr-plugin.toml. -->
 
-```
- promptator │ ◐ grundza 1 │ ? grundza 2 │ ✓ cervenak │ grundza 3 │ term
-```
+[![CI](https://github.com/dvoraj75/herdr-cowbell/actions/workflows/ci.yml/badge.svg)](https://github.com/dvoraj75/herdr-cowbell/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/dvoraj75/herdr-cowbell)](https://github.com/dvoraj75/herdr-cowbell/releases)
+[![License](https://img.shields.io/github/license/dvoraj75/herdr-cowbell)](LICENSE)
+[![herdr 0.9.2 or newer](https://img.shields.io/badge/herdr-%E2%89%A5%200.9.2-blue)](https://herdr.dev)
+[![Node 18 or newer](https://img.shields.io/badge/node-%E2%89%A5%2018-brightgreen)](https://nodejs.org)
+[![Docs](https://img.shields.io/badge/docs-online-informational)](https://dvoraj75.github.io/herdr-cowbell/)
 
-This line is schematic. Captures of a real client are under [Presets](#presets).
+![Tab bar with agent status icons in front of the tab names](docs/assets/hero.gif)
 
-`◐` working · `?` waiting for you (blocked) · `✓` done and not seen yet. Idle and unknown agents show nothing. Cowbell renames the tabs because herdr's tab bar has no per-tab icon slot.
+A [herdr](https://herdr.dev) plugin that shows each tab's agent status as an icon in front of the tab name. herdr's tab bar draws only the tab label and has no per-tab icon slot, so cowbell renames the tabs.
+
+- Three states in the default preset: `◐` working, `?` blocked (waiting for you), `✓` done and not seen yet. Idle and unknown agents show nothing.
+- Five presets: `ask`, `symbols`, `emoji`, `nerd` and `custom` (your own icons).
+- Actions for on/off, off and remove icons, refresh and next preset, which you can bind to a key.
+- An optional spinner (off by default). No dependencies: Node 18 or newer only, no npm packages, no build step.
 
 ## Install
 
@@ -18,118 +26,11 @@ herdr plugin install dvoraj75/herdr-cowbell
 
 Requirements: herdr 0.9.2 or newer, Node 18 or newer on `PATH` as `node`, Linux or macOS.
 
-herdr runs no hook on install, link or enable. The daemon starts at the next herdr server start (startup hook), when the next agent is detected in a pane (`pane.agent_detected` watchdog), or right away with *Cowbell: refresh now* (if you switched cowbell off before an uninstall or disable, use *Cowbell: on/off* instead; see [Known limitations](#known-limitations)). By default cowbell leaves tabs you never named (auto-named tabs) alone; see [Configuration](#configuration).
+Install does not start the daemon. It starts at the next herdr server start or when an agent is detected in a pane. The Quickstart below starts it right away. For pinning a version and updating, see [Install & update](https://dvoraj75.github.io/herdr-cowbell/install/).
 
-## Presets
+## Quickstart
 
-| Preset | working | blocked | done | Notes |
-| --- | --- | --- | --- | --- |
-| `ask` (default) | `◐` | `?` | `✓` | |
-| `symbols` | `◐` | `×` | `✓` | Like herdr's `status_indicators = "symbols"`. |
-| `emoji` | `⏳` | `❓` | `✅` | The only one with colour; two cells wide. |
-| `nerd` | `` (U+F110) | `` (U+F059) | `` (U+F00C) | Needs a Nerd Font; the glyphs vanish in many fonts. |
-| `custom` | from `config.json` | | | No icons of its own. |
-
-The captures below come from a sandbox herdr 0.9.3 server on 2026-10-30, with one agent per tab: `api` working, `review` blocked, `tests` done and not seen yet, `notes` idle; `shell` has no agent and is focused. The tab bar row is the screen of a real client, rebuilt as text.
-
-### ask
-
-Tab bar of a herdr 0.9.3 client (focused tab: `shell`), then the condensed `tab.list` reply ([docs/captures/ask.txt](docs/captures/ask.txt)):
-
-```
-  ◐ api     ? review     ✓ tests     notes     shell    +
-
-w1:t1   label="◐ api"        status=working
-w1:t2   label="? review"     status=blocked
-w1:t3   label="✓ tests"      status=done
-w1:t4   label="notes"        status=idle
-w1:t5   label="shell"        status=unknown  focused
-```
-
-![ask preset](docs/assets/preset-ask.png)
-
-### symbols
-
-Tab bar of a herdr 0.9.3 client (focused tab: `shell`), then the condensed `tab.list` reply ([docs/captures/symbols.txt](docs/captures/symbols.txt)):
-
-```
-  ◐ api     × review     ✓ tests     notes     shell    +
-
-w1:t1   label="◐ api"        status=working
-w1:t2   label="× review"     status=blocked
-w1:t3   label="✓ tests"      status=done
-w1:t4   label="notes"        status=idle
-w1:t5   label="shell"        status=unknown  focused
-```
-
-![symbols preset](docs/assets/preset-symbols.png)
-
-### emoji
-
-Tab bar of a herdr 0.9.3 client (focused tab: `shell`), then the condensed `tab.list` reply ([docs/captures/emoji.txt](docs/captures/emoji.txt)):
-
-```
-  ⏳ api     ❓ review     ✅ tests     notes     shell    +
-
-w1:t1   label="⏳ api"        status=working
-w1:t2   label="❓ review"     status=blocked
-w1:t3   label="✅ tests"      status=done
-w1:t4   label="notes"        status=idle
-w1:t5   label="shell"        status=unknown  focused
-```
-
-![emoji preset](docs/assets/preset-emoji.png)
-
-### nerd
-
-Tab bar of a herdr 0.9.3 client (focused tab: `shell`), then the condensed `tab.list` reply ([docs/captures/nerd.txt](docs/captures/nerd.txt)):
-
-```
-   api      review      tests     notes     shell    +
-
-w1:t1   label=" api"        status=working
-w1:t2   label=" review"     status=blocked
-w1:t3   label=" tests"      status=done
-w1:t4   label="notes"        status=idle
-w1:t5   label="shell"        status=unknown  focused
-```
-
-![nerd preset](docs/assets/preset-nerd.png)
-
-### custom
-
-```json
-{"preset": "custom", "icons": {"working": "»", "blocked": "!", "done": "*"}}
-```
-
-Tab bar of a herdr 0.9.3 client (focused tab: `shell`), then the condensed `tab.list` reply ([docs/captures/custom.txt](docs/captures/custom.txt)):
-
-```
-  » api     ! review     * tests     notes     shell    +
-
-w1:t1   label="» api"        status=working
-w1:t2   label="! review"     status=blocked
-w1:t3   label="* tests"      status=done
-w1:t4   label="notes"        status=idle
-w1:t5   label="shell"        status=unknown  focused
-```
-
-![custom preset](docs/assets/preset-custom.png)
-
-*Cowbell: next icon preset* cycles ask → symbols → emoji → nerd → custom → ask and writes `preset` into `config.json`. `custom` is skipped unless `icons` sets at least one non-empty icon.
-
-## Actions and key binding
-
-Full action ids are `dvoraj75.cowbell.<id>`.
-
-| id | Title | What it does |
-| --- | --- | --- |
-| `toggle` | Cowbell: on/off | Turns cowbell off (like *off*) if its daemon runs, otherwise switches it on and starts it. |
-| `off` | Cowbell: off and remove icons | Stops the daemon, restores every tab name and stays off across restarts. |
-| `refresh` | Cowbell: refresh now | Resyncs now. Starts a daemon if none runs. Does nothing while cowbell is off. |
-| `cycle-preset` | Cowbell: next icon preset | Switches to the next preset, writes it to `config.json` and applies it at once. |
-
-Key binding example for herdr's `config.toml`:
+The first press of *Cowbell: on/off* starts cowbell. If cowbell already runs (for example after herdr detected an agent), a press switches it off; press again to turn it back on. Bind it to a key in your herdr `config.toml`:
 
 ```toml
 [[keys.command]]
@@ -139,76 +40,28 @@ command = "dvoraj75.cowbell.toggle"
 description = "cowbell on/off"
 ```
 
-`herdr server reload-config` applies it without a restart. Avoid `prefix+b`: in herdr 0.9.3 it is the default sidebar toggle, and a plugin binding on it silently replaces that toggle (`herdr config check` does not warn).
+Then run `herdr server reload-config`. It applies the binding without a restart. Avoid `prefix+b`: it is herdr's default sidebar toggle, and a plugin binding on it silently replaces that toggle (see [Actions & key bindings](https://dvoraj75.github.io/herdr-cowbell/actions/)).
 
-## Configuration
+The default preset `ask` shows `◐ ? ✓`. *Cowbell: next icon preset* cycles through the others. See [Configuration & presets](https://dvoraj75.github.io/herdr-cowbell/configuration/).
 
-The file is `config.json` in the plugin's config directory. `herdr plugin list` shows it; normally it is `~/.config/herdr/plugins/config/dvoraj75.cowbell/config.json`.
+Tabs you never named (auto-named tabs) are left alone unless `include_auto_named` is true; see [Configuration & presets](https://dvoraj75.github.io/herdr-cowbell/configuration/#include_auto_named).
 
-| Key | Type | Default | Meaning |
-| --- | --- | --- | --- |
-| `preset` | string | `"ask"` | One of `ask`, `symbols`, `emoji`, `nerd`, `custom`. |
-| `icons` | object | `{}` | Overrides single states of the preset. Keys: `working`, `blocked`, `done`, `idle`, `unknown`; values are strings. `""` removes that state's icon. |
-| `separator` | string | `" "` | Placed between icon and name. |
-| `include_auto_named` | boolean | `false` | Also put icons on auto-named tabs; see below. |
-| `spinner.enabled` | boolean | `false` | Animate the icon of `working` tabs. |
-| `spinner.frames` | array of strings | `["◐","◓","◑","◒"]` | Frames shown in turn. Non-empty array of non-empty strings; duplicates are dropped. |
-| `spinner.interval_ms` | number | `1000` | Time between frames. At least 1000; lower values are clamped to 1000. |
+Before you uninstall or disable cowbell, run *Cowbell: off and remove icons*; see [Uninstalling](https://dvoraj75.github.io/herdr-cowbell/troubleshooting/#uninstalling).
 
-**Spinner.** With `spinner.enabled` set to `true`, only `working` tabs are animated. One timer drives every working tab, so they all show the same frame, and it runs only while at least one tab is working. The frames replace the `working` icon of every preset and any `icons.working` override. Frames are always stripped from labels, so changing them or turning the spinner off leaves no stale frame. Every frame is a tab rename and wakes every plugin that subscribes to `tab.renamed` (for example herdr-radar), so keep it off unless you want it.
+## Documentation
 
-A missing file means defaults. An invalid file (bad JSON, unknown preset or state, wrong type) logs one line and keeps the last good config, or the defaults if there is none.
+- [Install & update](https://dvoraj75.github.io/herdr-cowbell/install/)
+- [Configuration & presets](https://dvoraj75.github.io/herdr-cowbell/configuration/)
+- [Actions & key bindings](https://dvoraj75.github.io/herdr-cowbell/actions/)
+- [How it works](https://dvoraj75.github.io/herdr-cowbell/how-it-works/)
+- [Limitations & troubleshooting](https://dvoraj75.github.io/herdr-cowbell/troubleshooting/)
+- [Changelog](https://dvoraj75.github.io/herdr-cowbell/changelog/) (also [CHANGELOG.md](CHANGELOG.md))
 
-**When changes apply.** *Next icon preset* signals the daemon to reload `config.json` (SIGUSR2). *Refresh now* (SIGUSR1) does not reload it. A hand edit therefore applies on the next daemon start: while the daemon runs, run *Cowbell: on/off* twice (off restores the names, on starts a fresh daemon that reads the file); while none runs, once is enough. Or restart the herdr server.
+## Contributing, security, support
 
-**`include_auto_named`.** An auto-named tab is one whose label is still herdr's automatic name, its 1-based position in the workspace. herdr has no way to turn a renamed tab back into an auto-named one, so once cowbell adds an icon the tab keeps a fixed name for good. With the option on, cowbell keeps the number in sync with the tab's position while it runs; after *off* the tab keeps its last number as a fixed name. That is why it is opt-in.
-
-## Conflicts with other tab renamers
-
-Other plugins also rename tabs (herdr-auto-title, herdr-automatic-rename, herdr-tab-smart-rename, herdr-bar). Cowbell treats a rename by another plugin, or by you, as the tab's new name and puts the icon in front. It strips a leading icon of any preset first, so icons do not double.
-
-If another renamer keeps undoing the icon (3 foreign renames of a tab within 120 s, each within 30 s of cowbell's own rename), cowbell leaves that tab alone for 60 s, then tries again. Each repeat doubles the pause, up to 15 min. On such a tab the icon shows only between pauses. A renamer that answers more than about 30 s later is not detected; it costs at most one rename pair per 30 s. Renaming one tab yourself four times within about 90 s counts the same way and pauses its icon for 60 s.
-
-Plugins that listen to `tab.renamed` (for example herdr-radar) wake on each icon change. Cowbell renames a tab only when the label it wants differs from the current one. Let only one plugin rename a given tab.
-
-## Known limitations
-
-- **Other tab renamers.** See the section above. Short version: a tab that another plugin keeps renaming loses its icon for 60 s at a time, up to 15 min.
-- **Disabling or uninstalling.** herdr runs no plugin hook for either, so icons can stay in tab names; run *Cowbell: off and remove icons* first. See [Uninstalling](#uninstalling).
-- **Off survives reinstall.** herdr keeps the plugin's state directory across disable and uninstall, so if you switched cowbell off before that, it stays off after you enable or reinstall it: press *Cowbell: on/off* once to switch it on.
-- **Auto-named tabs.** herdr stops numbering a tab once it has been renamed and cannot restore an automatic name. With `include_auto_named: true`, cowbell keeps the number in sync itself. When cowbell is switched off, such a tab keeps its current number as a fixed name and no longer follows later moves or closes. A tab you named with just its position number (for example `3`) looks the same as an auto-named tab and may be treated as one.
-- **Server restart and live handoff.** The startup hook replaces the running daemon, so icons are back within about a second. Agent states that herdr itself resets on a handoff show as the reset state.
-- **Rare lock races.** If *Cowbell: next icon preset* crashes while holding its lock file, two presses right after the lock goes stale (10 s) can lose one preset step. A daemon start that crashes during a lock takeover can, with three starts at the same moment, briefly let two of them clean up the same stale lock; only one daemon keeps running. Neither needs any action.
-- **Refresh while off.** *Cowbell: refresh now* does nothing while cowbell is off.
-- **Config edits.** A hand edit of `config.json` needs a daemon restart; see [Configuration](#configuration).
-
-## Uninstalling
-
-herdr runs no plugin hook on disable or uninstall. While the daemon runs, a heartbeat self-check every 60 s notices within about a minute that the plugin is disabled or removed, restores the tab names and exits. A daemon that is not running cannot restore anything, and the icons stay in the names. That happens, for example, when the plugin is removed while the herdr server is down, or after a server restart once the plugin is already gone.
-
-So run *Cowbell: off and remove icons* first. Then disable or uninstall it with herdr's plugin commands.
-
-## Development
-
-No build step and no dependencies. Run the tests with `node --test`.
-
-CI runs the tests on Node 18, 20 and 22 on Linux and macOS for every push to `main` and every pull request. `node scripts/check-version.js [tag]` checks that `herdr-plugin.toml`, `package.json` and the top CHANGELOG heading carry the same version.
-
-Never run `herdr` commands against your live session while developing. Use a sandbox server as described in [PLAN.md](PLAN.md) under "Testing".
-
-`scripts/smoke.sh /tmp/cbsmoke` runs the real plugin against a throwaway sandbox herdr server (herdr and node on PATH, or `HERDR_BIN`). CI runs it against the minimum and the latest herdr.
-
-- `bin/cowbell.js`: the daemon entry point.
-- `bin/ctl.js`: the control CLI behind the actions and hooks (start, stop, on, off, toggle, refresh, cycle-preset, status).
-- `lib/churn.js`: rename-fight bookkeeping.
-- `lib/config.js`: reading, writing and cycling `config.json`.
-- `lib/control.js`: the control commands.
-- `lib/daemon.js`: the event loop: subscribe, resync, rename, reconnect.
-- `lib/icons.js`: presets, defaults and config validation.
-- `lib/label.js`: pure tab-label logic.
-- `lib/lock.js`: singleton pidfile lock.
-- `lib/socket.js`: the herdr socket client.
-- `lib/state.js`: `state.json` and the state directory.
+- Contributing: see [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md). Please follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+- Security: report vulnerabilities as described in [SECURITY.md](SECURITY.md).
+- Support: see [SUPPORT.md](SUPPORT.md).
 
 ## License
 

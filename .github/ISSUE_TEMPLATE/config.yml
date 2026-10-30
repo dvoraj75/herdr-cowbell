@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions
+    url: https://github.com/dvoraj75/herdr-cowbell/discussions
+    about: Ask and answer questions in GitHub Discussions
+  - name: Documentation
+    url: https://dvoraj75.github.io/herdr-cowbell/
+    about: Install, configuration and troubleshooting guides
