@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { cyclePreset, loadConfig, nextPreset } from "../lib/config.js";
 import { defaultConfig } from "../lib/icons.js";
+import { spawn } from "node:child_process";
 
 /**
  * Run `body` with a fresh temp dir that is removed afterwards.
@@ -152,4 +153,90 @@ test("cyclePreset throws and leaves the file byte-identical for invalid JSON or 
       assert.deepEqual(fs.readdirSync(dir), ["config.json"]);
     });
   }
+});
+
+/**
+ * Run `count` processes that each call cyclePreset(dir) once, released at the
+ * same moment, and wait for all of them.
+ * @param {string} dir
+ * @param {number} count
+ * @returns {Promise<{code: number | null, stderr: string}[]>}
+ */
+function cycleConcurrently(dir, count) {
+  const module = new URL("../lib/config.js", import.meta.url).href;
+  // Children spin until the shared start time so their calls overlap.
+  const startAt = Date.now() + 600;
+  const source = `
+    import { cyclePreset } from ${JSON.stringify(module)};
+    while (Date.now() < ${startAt}) {}
+    try { cyclePreset(${JSON.stringify(dir)}); }
+    catch (err) { console.error(err && err.message); process.exit(1); }
+  `;
+  const runs = [];
+  for (let i = 0; i < count; i += 1) {
+    runs.push(
+      new Promise((resolve) => {
+        const child = spawn(process.execPath, ["--input-type=module", "-e", source], {
+          stdio: ["ignore", "ignore", "pipe"],
+        });
+        let stderr = "";
+        child.stderr.on("data", (chunk) => {
+          stderr += chunk;
+        });
+        const timer = setTimeout(() => child.kill("SIGKILL"), 20000);
+        child.on("close", (code) => {
+          clearTimeout(timer);
+          resolve({ code, stderr });
+        });
+      }),
+    );
+  }
+  return Promise.all(runs);
+}
+
+test("concurrent cyclePreset calls each advance the preset once, with no failures", async () => {
+  for (let round = 0; round < 3; round += 1) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cb-"));
+    try {
+      fs.writeFileSync(path.join(dir, "config.json"), '{"preset":"symbols"}');
+      const results = await cycleConcurrently(dir, 3);
+      assert.deepEqual(results.map((r) => [r.code, r.stderr]), [[0, ""], [0, ""], [0, ""]]);
+      // symbols -> emoji -> nerd -> ask
+      assert.equal(JSON.parse(fs.readFileSync(path.join(dir, "config.json"), "utf8")).preset, "ask");
+      assert.deepEqual(fs.readdirSync(dir), ["config.json"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("cyclePreset takes over a stale lock file", () => {
+  withTempDir((dir) => {
+    const lock = path.join(dir, "config.json.lock");
+    fs.writeFileSync(lock, "");
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(lock, old, old);
+    assert.deepEqual(cyclePreset(dir), { preset: "symbols" });
+    assert.deepEqual(fs.readdirSync(dir), ["config.json"]);
+  });
+});
+
+test("cyclePreset throws a busy error when a fresh lock stays held", () => {
+  withTempDir((dir) => {
+    const lock = path.join(dir, "config.json.lock");
+    fs.writeFileSync(lock, "");
+    assert.throws(() => cyclePreset(dir), /config\.json is busy; try again/);
+    assert.equal(fs.existsSync(lock), true, "someone else's lock is left alone");
+    assert.equal(fs.existsSync(path.join(dir, "config.json")), false);
+  });
+});
+
+test("cyclePreset leaves no lock or temp file after success or a validation failure", () => {
+  withTempDir((dir) => {
+    cyclePreset(dir);
+    assert.deepEqual(fs.readdirSync(dir), ["config.json"]);
+    fs.writeFileSync(path.join(dir, "config.json"), '{"preset":"ask","separator":1}');
+    assert.throws(() => cyclePreset(dir), /fix it by hand/);
+    assert.deepEqual(fs.readdirSync(dir), ["config.json"]);
+  });
 });
