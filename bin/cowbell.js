@@ -3,8 +3,10 @@
 // and config into the loop in lib/daemon.js and maps signals onto it. All
 // logic lives in lib/ so it can be tested without herdr.
 //
-// Signals: SIGTERM/SIGINT restore every tab name and exit, SIGUSR1 resyncs
-// now, SIGUSR2 reloads config.json (bin/ctl.js sends these).
+// Signals: SIGTERM/SIGINT restore every tab name and exit, SIGHUP exits
+// keeping the names (the startup hook replaces the daemon of the previous
+// server this way; the next daemon takes over from state.json), SIGUSR1
+// resyncs now, SIGUSR2 reloads config.json (bin/ctl.js sends these).
 import { createClient, socketPathFromEnv } from "../lib/socket.js";
 import { isEnabled } from "../lib/state.js";
 import { loadConfig } from "../lib/config.js";
@@ -44,6 +46,28 @@ function shutdown(signal) {
   );
 }
 
+// Stop without restoring: a replacing daemon loads state.json and composes
+// on the stored bases, so nothing is doubled and nothing flickers.
+function hangup() {
+  // Like shutdown: a second signal must not cut the stop short.
+  if (exiting) return;
+  exiting = true;
+  if (!daemon) {
+    exitWith(0);
+    return;
+  }
+  daemon.stop().then(
+    () => {
+      log("SIGHUP: stopped, names kept for the next daemon");
+      exitWith(0);
+    },
+    (err) => {
+      log(`SIGHUP: stop failed (${err && err.message})`);
+      exitWith(0);
+    },
+  );
+}
+
 function refresh() {
   if (exiting || !daemon) return;
   daemon.refresh().catch((err) => log(`refresh failed (${err && err.message})`));
@@ -56,10 +80,12 @@ function reloadConfig() {
   daemon.setConfig(config).catch((err) => log(`config reload failed (${err && err.message})`));
 }
 
-// Before the lock: SIGUSR1/SIGUSR2 kill a Node process that has no handler,
-// and bin/ctl.js may signal a daemon the moment its pid is in the pidfile.
+// Before the lock: SIGHUP, SIGUSR1 and SIGUSR2 kill a Node process that has
+// no handler, and bin/ctl.js may signal a daemon the moment its pid is in the
+// pidfile.
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGHUP", hangup);
 process.on("SIGUSR1", refresh);
 process.on("SIGUSR2", reloadConfig);
 

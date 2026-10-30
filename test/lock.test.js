@@ -509,3 +509,37 @@ test("bin/cowbell.js: SIGTERM puts the tab names back before it exits", async ()
     await herdr.stop();
   }
 });
+
+test("bin/cowbell.js: SIGHUP exits 0 keeping the names and saving the state for the next daemon", async () => {
+  const dir = tempDir();
+  const tabs = [
+    {
+      tab_id: "t1",
+      workspace_id: "w1",
+      number: 1,
+      label: "api",
+      focused: true,
+      pane_count: 1,
+      agent_status: "working",
+    },
+  ];
+  const herdr = await startFakeHerdr(dir, tabs);
+  try {
+    const daemon = runDaemon(dir, herdr.path);
+    await waitFor(() => tabs[0].label === "◐ api", "the daemon to add the icon");
+    const renames = herdr.renames.length;
+
+    daemon.child.kill("SIGHUP");
+    const result = await daemon.done;
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.signal, null);
+    assert.match(result.stderr, /SIGHUP: stopped, names kept/);
+    assert.equal(herdr.renames.length, renames, `no restore: ${JSON.stringify(herdr.renames)}`);
+    assert.equal(tabs[0].label, "◐ api");
+    assert.equal(fs.existsSync(pidfilePath(dir)), false, "pidfile removed");
+    const saved = JSON.parse(fs.readFileSync(path.join(dir, "state.json"), "utf8"));
+    assert.deepEqual(saved.tabs.t1, { base: "api", lastWritten: "◐ api", autoNamed: false });
+  } finally {
+    await herdr.stop();
+  }
+});

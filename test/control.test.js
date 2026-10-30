@@ -34,7 +34,7 @@ function makeWorld({ withEnv = true } = {}) {
     // none), and return `spawnReturns` (default: the pid it wrote).
     spawnWrites: FAKE_PID,
     spawnReturns: undefined,
-    // Whether SIGTERM makes the fake pid exit.
+    // Whether SIGTERM or SIGHUP makes the fake pid exit.
     dieOnTerm: true,
     client: null,
     clientCreated: 0,
@@ -64,7 +64,8 @@ function makeWorld({ withEnv = true } = {}) {
     },
     kill(pid, signal) {
       world.kills.push([pid, signal]);
-      if (signal === "SIGKILL" || (signal === "SIGTERM" && world.dieOnTerm)) world.live.delete(pid);
+      const stopping = signal === "SIGTERM" || signal === "SIGHUP";
+      if (signal === "SIGKILL" || (stopping && world.dieOnTerm)) world.live.delete(pid);
     },
     sleep: async () => {
       world.sleeps += 1;
@@ -203,6 +204,80 @@ test("start whose spawned pid lost to another live daemon says already running",
   assert.deepEqual(w.out, ["already running (pid 555)"]);
 }));
 
+// ---- start from the startup hook ----
+
+const atStartup = (w) => {
+  w.deps.env.HERDR_PLUGIN_EVENT = "startup";
+};
+
+test("start from the startup hook replaces a live daemon: SIGHUP, wait for it, spawn", inWorld(async (w) => {
+  atStartup(w);
+  w.writePidfile(321);
+  w.dieOnTerm = false;
+  w.deps.sleep = async () => {
+    w.sleeps += 1;
+    if (w.sleeps === 3) w.live.delete(321);
+  };
+  const spawn = w.deps.spawnDaemon;
+  let oldAliveAtSpawn = null;
+  w.deps.spawnDaemon = () => {
+    oldAliveAtSpawn = w.live.has(321);
+    return spawn();
+  };
+  assert.equal(await run(["start"], w.deps), 0);
+  assert.deepEqual(w.kills, [[321, "SIGHUP"]]);
+  assert.equal(w.sleeps, 3);
+  assert.equal(oldAliveAtSpawn, false, "spawned only after the old daemon exited");
+  assert.equal(w.spawns, 1);
+  assert.deepEqual(w.out, [`replaced (pid 321 -> pid ${FAKE_PID})`]);
+  assert.deepEqual(w.err, []);
+}));
+
+test("start from the startup hook kills an old daemon that never exits, then spawns", inWorld(async (w) => {
+  atStartup(w);
+  w.writePidfile(321);
+  w.dieOnTerm = false;
+  const spawn = w.deps.spawnDaemon;
+  let pidfileAtSpawn = null;
+  w.deps.spawnDaemon = () => {
+    pidfileAtSpawn = fs.existsSync(w.pidfile());
+    return spawn();
+  };
+  assert.equal(await run(["start"], w.deps), 0);
+  assert.deepEqual(w.kills, [[321, "SIGHUP"], [321, "SIGKILL"]]);
+  assert.equal(w.sleeps, 100);
+  assert.equal(pidfileAtSpawn, false, "the killed daemon's pidfile was removed");
+  assert.equal(w.err.length, 1);
+  assert.match(w.err[0], /pid 321.*killed/);
+  assert.deepEqual(w.out, [`replaced (pid 321 -> pid ${FAKE_PID})`]);
+}));
+
+test("start from the startup hook with no daemon just starts one", inWorld(async (w) => {
+  atStartup(w);
+  assert.equal(await run(["start"], w.deps), 0);
+  assert.deepEqual(w.kills, []);
+  assert.deepEqual(w.out, [`started (pid ${FAKE_PID})`]);
+}));
+
+test("start from the watchdog event leaves a live daemon alone", inWorld(async (w) => {
+  w.deps.env.HERDR_PLUGIN_EVENT = "pane.agent_detected";
+  w.writePidfile(321);
+  assert.equal(await run(["start"], w.deps), 0);
+  assert.deepEqual(w.kills, []);
+  assert.equal(w.spawns, 0);
+  assert.deepEqual(w.out, ["already running (pid 321)"]);
+}));
+
+test("start from the startup hook while disabled kills nothing and spawns nothing", inWorld(async (w) => {
+  atStartup(w);
+  w.writePidfile(321);
+  setEnabled(w.stateDir, false);
+  assert.equal(await run(["start"], w.deps), 0);
+  assert.deepEqual(w.kills, []);
+  assert.equal(w.spawns, 0);
+  assert.deepEqual(w.out, ["cowbell is off"]);
+}));
+
 test("stop with no daemon says not running", inWorld(async (w) => {
   assert.equal(await run(["stop"], w.deps), 0);
   assert.deepEqual(w.out, ["not running"]);
@@ -289,6 +364,61 @@ test("off without a daemon restores tab names itself, saves state and closes the
   const saved = JSON.parse(fs.readFileSync(path.join(w.stateDir, "state.json"), "utf8"));
   assert.deepEqual(saved.tabs, { "w1:t2": { ...entry, lastWritten: "api" } });
   assert.deepEqual(w.kills, []);
+}));
+
+test("off without a daemon removes a pidfile left by a dead one", inWorld(async (w) => {
+  fs.mkdirSync(w.stateDir, { recursive: true });
+  fs.writeFileSync(w.pidfile(), "999\n"); // not in the live set
+  w.client = fakeClient([]);
+  assert.equal(await run(["off"], w.deps), 0);
+  assert.equal(fs.existsSync(w.pidfile()), false);
+  assert.deepEqual(w.kills, []);
+  assert.deepEqual(w.out, ["off; tab names restored"]);
+}));
+
+test("off: an on while the daemon was restoring starts a new daemon once the old one is gone", inWorld(async (w) => {
+  w.writePidfile(321);
+  w.dieOnTerm = false;
+  w.deps.sleep = async () => {
+    w.sleeps += 1;
+    // A second toggle (on) during the restore: it saw the daemon still alive
+    // and started nothing.
+    if (w.sleeps === 2) setEnabled(w.stateDir, true);
+    if (w.sleeps === 3) w.live.delete(321);
+  };
+  assert.equal(await run(["off"], w.deps), 0);
+  assert.deepEqual(w.kills, [[321, "SIGTERM"]]);
+  assert.equal(isEnabled(w.stateDir), true);
+  assert.equal(w.spawns, 1);
+  assert.deepEqual(w.out, ["stopped", "switched on again meanwhile; starting", `started (pid ${FAKE_PID})`]);
+}));
+
+test("off: a failing state save after a good restore says so, exits 1 and closes the client", inWorld(async (w) => {
+  fs.mkdirSync(w.stateDir, { recursive: true });
+  const entry = { base: "api", lastWritten: "◐ api", autoNamed: false };
+  fs.writeFileSync(path.join(w.stateDir, "state.json"), JSON.stringify({ version: 1, tabs: { "w1:t2": entry } }));
+  w.client = fakeClient([{ tab_id: "w1:t2", workspace_id: "w1", label: "◐ api" }]);
+  // Once the rename went through, a directory takes the place saveState renames onto.
+  const request = w.client.request;
+  w.client.request = async (method, params) => {
+    const result = await request(method, params);
+    if (method === "tab.rename") {
+      fs.rmSync(path.join(w.stateDir, "state.json"));
+      fs.mkdirSync(path.join(w.stateDir, "state.json"));
+    }
+    return result;
+  };
+
+  assert.equal(await run(["off"], w.deps), 1);
+
+  assert.deepEqual(w.client.calls, [
+    ["tab.list", {}],
+    ["tab.rename", { tab_id: "w1:t2", label: "api" }],
+  ]);
+  assert.equal(w.client.closed, 1);
+  assert.equal(w.err.length, 1);
+  assert.match(w.err[0], /^tab names restored, but state\.json was not saved \(/);
+  assert.deepEqual(w.out, []);
 }));
 
 test("off with an unreachable herdr exits 1 but the flag stays written", inWorld(async (w) => {
