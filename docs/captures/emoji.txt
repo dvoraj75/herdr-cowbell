@@ -1,0 +1,8 @@
+# preset: emoji — herdr 0.9.3 sandbox, 2026-10-30, source: TUI client tab bar (100x12, focused tab: shell) + tab list
+  ⏳ api     ❓ review     ✅ tests     notes     shell    +
+
+w1:t1   label="⏳ api"        status=working
+w1:t2   label="❓ review"     status=blocked
+w1:t3   label="✅ tests"      status=done
+w1:t4   label="notes"        status=idle
+w1:t5   label="shell"        status=unknown  focused
