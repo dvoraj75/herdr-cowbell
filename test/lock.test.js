@@ -2,6 +2,7 @@ import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
+import net from "node:net";
 import path from "node:path";
 import readline from "node:readline";
 import { spawn, spawnSync } from "node:child_process";
@@ -170,6 +171,63 @@ test("livePid is null for a missing or garbage file, a dead holder, and the pid 
   assert.equal(livePid(dir, { isAlive: (pid) => pid === 77 }), 77);
 });
 
+// ---- pidfiles from before the current boot ----
+
+/** Write a pidfile with process.pid (a live pid) and set its mtime. */
+function writeLivePidfile(dir, mtimeMs) {
+  write(dir, `${process.pid}\n`);
+  const when = new Date(mtimeMs);
+  fs.utimesSync(pidfilePath(dir), when, when);
+}
+
+const BOOT = Date.now() - 3600 * 1000;
+
+test("livePid ignores a pidfile written before the boot, even when its pid is alive", () => {
+  const dir = tempDir();
+  writeLivePidfile(dir, BOOT - 60000);
+  assert.equal(livePid(dir, { isAlive: alwaysAlive, bootTimeMs: BOOT }), null);
+});
+
+test("livePid keeps a pidfile written after the boot, or a moment before it (clock granularity)", () => {
+  const dir = tempDir();
+  writeLivePidfile(dir, BOOT + 60000);
+  assert.equal(livePid(dir, { isAlive: alwaysAlive, bootTimeMs: BOOT }), process.pid);
+  writeLivePidfile(dir, BOOT - 1000);
+  assert.equal(livePid(dir, { isAlive: alwaysAlive, bootTimeMs: BOOT }), process.pid);
+});
+
+test("by default the boot-time check runs only where /proc is missing", () => {
+  const dir = tempDir();
+  const hasProc = fs.existsSync("/proc/self/cmdline");
+  const realBoot = Date.now() - os.uptime() * 1000;
+  writeLivePidfile(dir, realBoot - 60000);
+  // With /proc the cmdline check rejects a reused pid, and a clock stepped
+  // forward after boot (no hardware clock) must not orphan a live daemon.
+  assert.equal(livePid(dir, { isAlive: alwaysAlive }), hasProc ? process.pid : null);
+
+  writeLivePidfile(dir, Date.now());
+  assert.equal(livePid(dir, { isAlive: alwaysAlive }), process.pid);
+  assert.deepEqual(acquire(dir, { pid: 111, isAlive: alwaysAlive }), { acquired: false, pid: process.pid });
+});
+
+test("acquire takes over a pidfile written before the boot, even when its pid is alive", () => {
+  const dir = tempDir();
+  writeLivePidfile(dir, BOOT - 60000);
+  assert.deepEqual(acquire(dir, { pid: 111, isAlive: alwaysAlive, bootTimeMs: BOOT }), { acquired: true });
+  assert.equal(readPid(dir), 111);
+  assert.deepEqual(fs.readdirSync(dir), [PIDFILE]);
+});
+
+test("acquire leaves a live holder's pidfile from this boot alone", () => {
+  const dir = tempDir();
+  writeLivePidfile(dir, BOOT + 60000);
+  assert.deepEqual(acquire(dir, { pid: 111, isAlive: alwaysAlive, bootTimeMs: BOOT }), {
+    acquired: false,
+    pid: process.pid,
+  });
+  assert.equal(readPid(dir), process.pid);
+});
+
 test("pidExists is true for this process and false for a dead pid", () => {
   assert.equal(pidExists(process.pid), true);
   assert.equal(pidExists(deadPid()), false);
@@ -264,17 +322,25 @@ test("two processes racing to take over a stale pidfile: exactly one wins, every
 // ---- bin/cowbell.js ----
 
 /** An environment for the daemon entry that cannot reach the user's herdr. */
-function scrubbedEnv(dir) {
+function scrubbedEnv(dir, socketPath) {
   const env = { ...process.env };
   for (const key of Object.keys(env)) if (key.startsWith("HERDR_")) delete env[key];
-  env.HERDR_SOCKET_PATH = path.join(dir, "no-such-socket");
+  env.HERDR_SOCKET_PATH = socketPath || path.join(dir, "no-such-socket");
   env.HERDR_PLUGIN_STATE_DIR = dir;
+  env.HERDR_PLUGIN_CONFIG_DIR = path.join(dir, "config");
   return env;
 }
 
-/** Spawn bin/cowbell.js; `done` resolves with {code, signal, stderr}. */
-function runDaemon(dir) {
-  const child = spawn(process.execPath, [COWBELL], { env: scrubbedEnv(dir), stdio: ["ignore", "ignore", "pipe"] });
+/**
+ * Spawn bin/cowbell.js; `done` resolves with {code, signal, stderr}.
+ * @param {string} dir The state directory.
+ * @param {string} [socketPath] A fake herdr socket; default: one that does not exist.
+ */
+function runDaemon(dir, socketPath) {
+  const child = spawn(process.execPath, [COWBELL], {
+    env: scrubbedEnv(dir, socketPath),
+    stdio: ["ignore", "ignore", "pipe"],
+  });
   children.add(child);
   let stderr = "";
   child.stderr.on("data", (chunk) => {
@@ -337,4 +403,96 @@ test("bin/cowbell.js: SIGUSR1 and SIGUSR2 do not kill it", async () => {
   assert.equal(pidExists(daemon.child.pid), true);
   daemon.child.kill("SIGTERM");
   assert.equal((await daemon.done).code, 0);
+});
+
+/**
+ * A fake herdr on a unix socket in `dir`. Like herdr, it answers one request
+ * per connection and closes it, except `events.subscribe`, whose connection
+ * stays open. `tab.rename` changes the label later `tab.list` calls return.
+ * @param {string} dir
+ * @param {object[]} tabs The tabs `tab.list` returns; renamed in place.
+ */
+async function startFakeHerdr(dir, tabs) {
+  const socketPath = path.join(dir, "h.sock");
+  // sun_path holds about 104 bytes on macOS, 108 on Linux.
+  assert.ok(Buffer.byteLength(socketPath) < 100, `socket path too long: ${socketPath}`);
+  const renames = [];
+  const sockets = new Set();
+  const server = net.createServer((socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+    socket.on("error", () => {});
+    socket.setEncoding("utf8");
+    let buffer = "";
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      let newline;
+      while ((newline = buffer.indexOf("\n")) >= 0) {
+        const request = JSON.parse(buffer.slice(0, newline));
+        buffer = buffer.slice(newline + 1);
+        const reply = (body) => `${JSON.stringify({ id: request.id, ...body })}\n`;
+        if (request.method === "events.subscribe") {
+          socket.write(reply({ result: { type: "subscription_started" } }));
+          continue;
+        }
+        let body;
+        if (request.method === "pane.list") {
+          body = { result: { panes: [{ pane_id: "p1" }] } };
+        } else if (request.method === "tab.list") {
+          body = { result: { tabs: tabs.map((tab) => ({ ...tab })) } };
+        } else if (request.method === "tab.rename") {
+          const { tab_id: tabId, label } = request.params;
+          renames.push({ tab_id: tabId, label });
+          const tab = tabs.find((candidate) => candidate.tab_id === tabId);
+          if (tab) tab.label = label;
+          body = tab ? { result: { type: "tab_info" } } : { error: { code: "tab_not_found", message: tabId } };
+        } else {
+          body = { error: { code: "unknown_method", message: request.method } };
+        }
+        socket.end(reply(body));
+      }
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socketPath, resolve);
+  });
+  return {
+    path: socketPath,
+    renames,
+    async stop() {
+      for (const socket of sockets) socket.destroy();
+      await new Promise((resolve) => server.close(resolve));
+    },
+  };
+}
+
+test("bin/cowbell.js: SIGTERM puts the tab names back before it exits", async () => {
+  const dir = tempDir();
+  const tabs = [
+    {
+      tab_id: "t1",
+      workspace_id: "w1",
+      number: 1,
+      label: "api",
+      focused: true,
+      pane_count: 1,
+      agent_status: "working",
+    },
+  ];
+  const herdr = await startFakeHerdr(dir, tabs);
+  try {
+    const daemon = runDaemon(dir, herdr.path);
+    await waitFor(() => tabs[0].label === "◐ api", "the daemon to add the icon");
+
+    daemon.child.kill("SIGTERM");
+    const result = await daemon.done;
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.signal, null);
+    assert.deepEqual(herdr.renames.at(-1), { tab_id: "t1", label: "api" }, JSON.stringify(herdr.renames));
+    assert.equal(tabs[0].label, "api");
+    assert.equal(fs.existsSync(pidfilePath(dir)), false, "pidfile removed");
+  } finally {
+    await herdr.stop();
+  }
 });
