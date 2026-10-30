@@ -228,6 +228,19 @@ test("acquire leaves a live holder's pidfile from this boot alone", () => {
   assert.equal(readPid(dir), process.pid);
 });
 
+test("acquire rewrites a pidfile from before the boot that holds our own pid, so the new daemon counts as live", () => {
+  // A daemon died before a reboot and the new one got the same pid: the old
+  // mtime must not survive, or livePid would call the new daemon absent.
+  const dir = tempDir();
+  write(dir, "4242\n");
+  const beforeBoot = new Date(BOOT - 60000);
+  fs.utimesSync(pidfilePath(dir), beforeBoot, beforeBoot);
+  assert.deepEqual(acquire(dir, { pid: 4242, isAlive: alwaysAlive, bootTimeMs: BOOT }), { acquired: true });
+  assert.equal(livePid(dir, { isAlive: alwaysAlive, bootTimeMs: BOOT }), 4242);
+  assert.deepEqual(acquire(dir, { pid: 111, isAlive: alwaysAlive, bootTimeMs: BOOT }), { acquired: false, pid: 4242 });
+  assert.deepEqual(fs.readdirSync(dir), [PIDFILE]);
+});
+
 test("pidExists is true for this process and false for a dead pid", () => {
   assert.equal(pidExists(process.pid), true);
   assert.equal(pidExists(deadPid()), false);
