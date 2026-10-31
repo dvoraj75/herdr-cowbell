@@ -14,6 +14,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - herdr smoke test in CI against the minimum and the latest herdr (scripts/smoke.sh, smoke.yml) and a weekly canary that opens a herdr-compat issue when the latest herdr breaks cowbell (#19).
 - Release workflow: pushing a vX.Y.Z tag verifies the versions, runs the tests and publishes a GitHub release with that version's CHANGELOG section as the notes (#22).
 - Docs site at https://dvoraj75.github.io/herdr-cowbell/ built with mkdocs-material and deployed from main; the ci.yml docs job builds it with --strict on every PR (#21).
+- Short README front page (badges, hero GIF, pitch, install, quickstart, links to the docs) and community files: CONTRIBUTING, CODE_OF_CONDUCT, SECURITY, SUPPORT, issue forms and a PR template (#24).
 
 
 ## 0.1.0 — 2026-10-30

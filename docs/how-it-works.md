@@ -46,6 +46,8 @@ These events trigger a resync: a tab is created, closed, moved, renamed or focus
 
 ## When renamers fight
 
+Other plugins also rename tabs, for example herdr-auto-title, herdr-automatic-rename, herdr-tab-smart-rename and herdr-bar. cowbell treats a rename by another plugin, or by you, as the tab's new name and puts the icon in front. It strips a leading icon of any preset first, so icons do not double.
+
 Another plugin may rename the same tabs. If it renames a tab back after every cowbell rename, the two would loop forever. cowbell watches for this per tab.
 
 - A foreign rename within 30 s of cowbell's own rename of that tab counts as a fight.

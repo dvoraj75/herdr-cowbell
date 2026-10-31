@@ -1,0 +1,105 @@
+name: Bug report
+description: Something in herdr-cowbell does not work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. For questions and usage help, please use [Discussions](https://github.com/dvoraj75/herdr-cowbell/discussions) instead.
+
+        Check the [troubleshooting page](https://dvoraj75.github.io/herdr-cowbell/troubleshooting/) first. Never paste secrets: look through logs and output before you submit them.
+  - type: input
+    id: herdr-version
+    attributes:
+      label: herdr version
+      description: "Output of `herdr --version`."
+    validations:
+      required: true
+  - type: input
+    id: cowbell-version
+    attributes:
+      label: cowbell version
+      description: "The cowbell line of `herdr plugin list`. It shows `@v0.1.0` for a pinned install or `@<commit sha>` for an unpinned one."
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - macOS
+        - Other (say which in the OS version field)
+    validations:
+      required: true
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version
+      description: "For example Ubuntu 24.04 or macOS 14.5."
+    validations:
+      required: true
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal emulator and version
+      description: "For example kitty 0.35 or iTerm2 3.5."
+    validations:
+      required: true
+  - type: input
+    id: font
+    attributes:
+      label: Font
+      description: "The font your terminal uses. Icon glyphs depend on it."
+    validations:
+      required: true
+  - type: dropdown
+    id: preset
+    attributes:
+      label: Icon preset
+      options:
+        - ask
+        - symbols
+        - emoji
+        - nerd
+        - custom
+    validations:
+      required: true
+  - type: textarea
+    id: ctl-status
+    attributes:
+      label: ctl.js status output
+      description: |
+        Run `node bin/ctl.js status` in the plugin directory (`source.managed_path` from `herdr plugin list --plugin dvoraj75.cowbell --json`), with `HERDR_PLUGIN_STATE_DIR` and `HERDR_PLUGIN_CONFIG_DIR` set. The full command is on the [troubleshooting page](https://dvoraj75.github.io/herdr-cowbell/troubleshooting/#checking-status-with-ctljs).
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: plugin-log
+    attributes:
+      label: Plugin log
+      description: "Output of `herdr plugin log list --plugin dvoraj75.cowbell` and, if the daemon failed to start, `daemon.log` from the plugin state directory. Optional: some bugs (for example a wrong icon) leave no log lines."
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+    validations:
+      required: true
