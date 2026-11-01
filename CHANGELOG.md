@@ -2,13 +2,12 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [semantic versioning](https://semver.org/).
 
-## Unreleased
+## 0.2.0 — 2026-11-01
 
-### Fixed
-
-- *Cowbell: on/off* now starts cowbell when no daemon runs, whatever the saved setting says; the first press after install shows icons instead of switching off (#23).
+The professional-repo release: CI, a herdr smoke test and weekly canary, a docs site, tag-driven releases and demo media, plus the on/off fix and an optional spinner.
 
 ### Added
+
 - Optional working spinner: `spinner.enabled` (off by default), `spinner.frames` and `spinner.interval_ms` (at least 1000 ms). One timer drives every working tab; each frame is a tab rename (#9).
 - CI on every push to main and every PR: node --test on Node 18, 20 and 22 on Linux and macOS, plus a version-consistency check (scripts/check-version.js) (#18).
 - herdr smoke test in CI against the minimum and the latest herdr (scripts/smoke.sh, smoke.yml) and a weekly canary that opens a herdr-compat issue when the latest herdr breaks cowbell (#19).
@@ -16,6 +15,9 @@ All notable changes to this project are documented here. The format follows [Kee
 - Docs site at https://dvoraj75.github.io/herdr-cowbell/ built with mkdocs-material and deployed from main; the ci.yml docs job builds it with --strict on every PR (#21).
 - Short README front page (badges, hero GIF, pitch, install, quickstart, links to the docs) and community files: CONTRIBUTING, CODE_OF_CONDUCT, SECURITY, SUPPORT, issue forms and a PR template (#24).
 
+### Fixed
+
+- *Cowbell: on/off* now starts cowbell when no daemon runs, whatever the saved setting says; the first press after install shows icons instead of switching off (#23).
 
 ## 0.1.0 — 2026-10-30
 
@@ -48,4 +50,4 @@ First release.
 
 ### Known limitations
 
-See the Known limitations section in the README. The `spinner` options are validated but have no effect in this release.
+See [Known limitations](https://dvoraj75.github.io/herdr-cowbell/troubleshooting/#known-limitations) in the docs. The `spinner` options are validated but have no effect in this release.
